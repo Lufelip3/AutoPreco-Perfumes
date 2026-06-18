@@ -1,0 +1,38 @@
+# ==============================================================================
+#  AutoPreço Perfumes — .gitignore
+# ==============================================================================
+
+# ── Planilhas e dados sensíveis ──────────────────────────────────────────────
+# Arquivos CSV e XLSX contêm dados de produtos, preços e estoque do ERP.
+# Nunca devem ser versionados pois mudam constantemente e podem conter
+# informações comerciais confidenciais.
+*.csv
+*.xlsx
+*.xls
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# ── Ambientes virtuais ──────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env/
+
+# ── IDEs e editores ─────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── Distribuição / build ────────────────────────────────────────────────────
+dist/
+build/
+*.egg-info/
+*.spec
