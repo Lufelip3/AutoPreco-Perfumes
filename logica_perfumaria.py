@@ -669,6 +669,14 @@ def processar_perfumaria(arquivo_csv, arquivo_xlsx, cotacao_dolar, taxa_frete,
         csv_reivindicado.setdefault(csv_idx, []).append(i_xlsx)
     indices_conflito = {csv_idx for csv_idx, rv in csv_reivindicado.items() if len(rv) > 1}
 
+    # Move os produtos do XLSX que entraram em conflito para os "não encontrados"
+    # Assim eles aparecem na tela de reassociação manual para o usuário resolver.
+    for csv_idx in indices_conflito:
+        for i_xlsx in csv_reivindicado[csv_idx]:
+            nome_perf_conflito = xlsx_mapa[i_xlsx][2]
+            if nome_perf_conflito not in nao_encontrados:
+                nao_encontrados.append(nome_perf_conflito)
+
     # ------------------------------------------------------------------
     #  PASSADA 2 — Aplica em memória (preço ou estoque)
     # ------------------------------------------------------------------
@@ -815,7 +823,8 @@ def processar_perfumaria(arquivo_csv, arquivo_xlsx, cotacao_dolar, taxa_frete,
     log_callback("\n" + "=" * 55)
     if indices_conflito:
         log_callback(
-            f"\n[CONFLITO] {len(indices_conflito)} produto(s) disputado(s) — NÃO exportados:",
+            f"\n[CONFLITO] {len(indices_conflito)} produto(s) do CSV disputado(s) — "
+            f"os itens do XLSX foram enviados para reassociação manual:",
             "alerta"
         )
         for csv_idx in sorted(indices_conflito):
@@ -958,6 +967,10 @@ def aplicar_reassociacao(resultado, reassociacoes, log_callback):
         quantidade_ml  = r.get('quantidade_ml', 100.0)
         valor_unitario = r.get('valor_unitario', 0.0)
         qtd_estoque    = r.get('qtd_estoque')
+
+        # Se o produto foi reassociado com sucesso, removemos da lista de não encontrados
+        if 'nao_encontrados' in resultado and nome_perfume in resultado['nao_encontrados']:
+            resultado['nao_encontrados'].remove(nome_perfume)
 
         desc_csv = str(df_bling.at[csv_idx, col_desc]).strip()
         sku_csv  = get_sku(csv_idx)

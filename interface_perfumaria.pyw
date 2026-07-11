@@ -25,7 +25,7 @@
 # ==============================================================================
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 import os
 import threading
 import queue
@@ -96,6 +96,7 @@ class PreviewWindow(tk.Toplevel):
 
         self._criar_widgets(modo)
         self._popular_tabela(modo)
+        self._verificar_pode_confirmar()
 
     # ── Mapeamento item_tree → preview_row (para edição) ──────────────────────
     def _item_para_row_idx(self, item_id):
@@ -169,26 +170,28 @@ class PreviewWindow(tk.Toplevel):
         frame_tree = tk.Frame(self, bg=self.COR_BG, padx=12, pady=6)
         frame_tree.pack(fill=tk.BOTH, expand=True)
 
-        # Colunas diferentes para cada modo
+        # Colunas diferentes para cada modo — "sel" é sempre a primeira (checkbox)
         if modo == 'estoque':
-            colunas    = ("sku", "descricao", "antes", "depois", "gtin")
+            colunas    = ("sel", "sku", "descricao", "antes", "depois", "gtin")
             cabecalhos = {
+                "sel"      : ("✔",             30),
                 "sku"      : ("SKU",           70),
-                "descricao": ("Descrição CSV", 360),
+                "descricao": ("Descrição CSV", 340),
                 "antes"    : ("Est. Atual",    100),
                 "depois"   : ("Est. Novo",     100),
                 "gtin"     : ("GTIN/EAN",      140),
             }
         else:
-            colunas    = ("sku", "nome_xlsx", "descricao", "antes", "depois", "custo", "gtin")
+            colunas    = ("sel", "sku", "nome_xlsx", "descricao", "antes", "depois", "custo", "gtin")
             cabecalhos = {
+                "sel"      : ("✔",             30),
                 "sku"      : ("SKU",           65),
-                "nome_xlsx": ("Nome XLSX",     210),
-                "descricao": ("Descrição CSV", 210),
+                "nome_xlsx": ("Nome XLSX",     200),
+                "descricao": ("Descrição CSV", 200),
                 "antes"    : ("Preço Atual",    95),
                 "depois"   : ("Preço Novo",     95),
                 "custo"    : ("Custo",           85),
-                "gtin"     : ("GTIN/EAN",       130),
+                "gtin"     : ("GTIN/EAN",       120),
             }
 
         # Configuração do estilo escuro para o Treeview.
@@ -210,7 +213,8 @@ class PreviewWindow(tk.Toplevel):
                                   show="headings", style="Dark.Treeview")
         for col, (label, width) in cabecalhos.items():
             self.tree.heading(col, text=label)
-            self.tree.column(col, width=width, anchor="w")
+            anchor = "center" if col == "sel" else "w"
+            self.tree.column(col, width=width, anchor=anchor, minwidth=width)
 
         # Scrollbars vertical e horizontal
         sb_v = ttk.Scrollbar(frame_tree, orient="vertical",   command=self.tree.yview)
@@ -229,11 +233,14 @@ class PreviewWindow(tk.Toplevel):
         self.tree.tag_configure("gtin_laranja", foreground=self.COR_GTIN_LAR)
         self.tree.tag_configure("gtin_vermelho",foreground=self.COR_GTIN_VERM)
         self.tree.tag_configure("reassociado",  foreground=self.COR_REASSOC)
+        self.tree.tag_configure("desmarcado",   foreground="#555566")
 
-        # ── Bindings para interação: duplo clique e menu de contexto ──
-        #  <Double-1> = duplo clique com botão esquerdo
-        #  <Button-3> = clique com botão direito (abre menu de contexto)
-        self.tree.bind("<Double-1>",    self._abrir_trocar_match)
+        # ── Bindings para interação ──────────────────────────────────
+        #  <Button-1>  = clique esquerdo — toggle checkbox se na coluna sel
+        #  <Double-1>  = duplo clique — trocar match OU editar valor
+        #  <Button-3>  = clique direito — menu de contexto
+        self.tree.bind("<Button-1>",    self._toggle_selecao)
+        self.tree.bind("<Double-1>",    self._on_duplo_clique)
         self.tree.bind("<Button-3>",    self._menu_contexto)
 
         # Menu de contexto (clique direito) — aparece na posição do cursor
@@ -248,11 +255,13 @@ class PreviewWindow(tk.Toplevel):
         frame_btn = tk.Frame(self, bg=self.COR_BG, pady=10)
         frame_btn.pack(fill=tk.X, padx=12)
 
-        tk.Button(frame_btn, text="✅  Confirmar e Exportar",
-                  bg="#15803d", fg="white", font=("Arial", 11, "bold"),
-                  relief="flat", cursor="hand2", padx=18, pady=6,
-                  activebackground="#166534",
-                  command=self._confirmar).pack(side=tk.LEFT, padx=(0, 12))
+        self.btn_confirmar = tk.Button(
+            frame_btn, text="✅  Confirmar e Exportar",
+            bg="#15803d", fg="white", font=("Arial", 11, "bold"),
+            relief="flat", cursor="hand2", padx=18, pady=6,
+            activebackground="#166534",
+            command=self._confirmar)
+        self.btn_confirmar.pack(side=tk.LEFT, padx=(0, 12))
 
         tk.Button(frame_btn, text="❌  Cancelar",
                   bg="#7f1d1d", fg="white", font=("Arial", 11),
@@ -261,9 +270,14 @@ class PreviewWindow(tk.Toplevel):
                   command=self.destroy).pack(side=tk.LEFT)
 
         tk.Label(frame_btn,
-                 text="✏️ duplo clique = trocar match   🗑 direito = remover",
+                 text="✏️ duplo clique = trocar match / editar valor   🗑 direito = remover   ☑ clique = marcar/desmarcar",
                  bg=self.COR_BG, fg="#555577",
                  font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=16)
+
+        # Label de aviso (conflitos, etc.) — inicialmente vazio
+        self.lbl_aviso = tk.Label(self, text="", bg=self.COR_BG, fg="#ff4d4d",
+                                  font=("Segoe UI", 9, "bold"))
+        self.lbl_aviso.pack(fill=tk.X, padx=12)
 
         # ── Legenda de cores (só aparece se há produtos com GTIN) ─────
         if any(r.get('gtin') for r in self.resultado['preview_rows']):
@@ -292,15 +306,19 @@ class PreviewWindow(tk.Toplevel):
         for row in self.resultado['preview_rows']:
             tag          = self._tag_para_row(row)
             gtin_display = (row.get('gtin') or '—')
+            sel_char     = row.get('sel', '☑')
             if modo == 'estoque':
-                valores = (row['sku'], row['descricao'],
+                valores = (sel_char, row['sku'], row['descricao'],
                            row['antes'], row['depois'], gtin_display)
             else:
                 nome_xlsx = row.get('nome_xlsx') or row.get('nome_perfume') or '—'
-                valores = (row['sku'], nome_xlsx, row['descricao'],
+                valores = (sel_char, row['sku'], nome_xlsx, row['descricao'],
                            row['antes'], row['depois'],
                            row.get('custo', ''), gtin_display)
-            self.tree.insert("", tk.END, values=valores, tags=(tag,))
+            tags = [tag]
+            if sel_char == '☐':
+                tags.append('desmarcado')
+            self.tree.insert("", tk.END, values=valores, tags=tuple(tags))
 
     # ── Menu contexto ─────────────────────────────────────────────────────────
     def _menu_contexto(self, event):
@@ -349,6 +367,146 @@ class PreviewWindow(tk.Toplevel):
         self.tree.delete(item_id)
         self.log_callback(f"ℹ️  Removido da exportação: SKU {row['sku']} | {row['descricao']}", "alerta")
 
+    # ── Toggle seleção (checkbox) ──────────────────────────────────────────────
+    def _toggle_selecao(self, event):
+        """
+        Alterna entre ☑ e ☐ quando o usuário clica na coluna de seleção.
+
+        Identifica a coluna clicada. Se for a coluna #1 (sel), alterna o
+        estado e aplica/remove a tag 'desmarcado'. Chama
+        _verificar_pode_confirmar() após cada toggle.
+        """
+        # Identifica coluna e linha clicadas
+        coluna = self.tree.identify_column(event.x)
+        item   = self.tree.identify_row(event.y)
+        if not item or coluna != '#1':
+            return  # Clique fora da coluna sel — não faz nada
+
+        row_idx  = self._item_para_row_idx(item)
+        row      = self.resultado['preview_rows'][row_idx]
+        valores  = list(self.tree.item(item, 'values'))
+        tags_atuais = list(self.tree.item(item, 'tags'))
+
+        if valores[0] == '☑':
+            valores[0] = '☐'
+            row['sel'] = '☐'
+            if 'desmarcado' not in tags_atuais:
+                tags_atuais.append('desmarcado')
+        else:
+            valores[0] = '☑'
+            row['sel'] = '☑'
+            if 'desmarcado' in tags_atuais:
+                tags_atuais.remove('desmarcado')
+
+        self.tree.item(item, values=tuple(valores), tags=tuple(tags_atuais))
+        self._verificar_pode_confirmar()
+
+    # ── Duplo clique: trocar match OU editar valor ───────────────────────────
+    def _on_duplo_clique(self, event):
+        """
+        Handler de duplo clique. Decide se abre o diálogo de troca de
+        match ou a edição inline de valor, dependendo da coluna clicada.
+
+        Se o clique for na coluna "depois" (Preço Novo / Est. Novo),
+        abre edição inline. Caso contrário, abre TrocarMatchDialog.
+        """
+        coluna = self.tree.identify_column(event.x)
+        item   = self.tree.identify_row(event.y)
+        if not item:
+            return
+
+        # Descobre qual coluna lógica corresponde ao #N clicado
+        colunas = self.tree['columns']
+        col_num = int(coluna.replace('#', '')) - 1  # 0-indexed
+        if 0 <= col_num < len(colunas):
+            col_id = colunas[col_num]
+        else:
+            col_id = ''
+
+        if col_id == 'depois':
+            self._editar_valor_inline(item)
+        elif col_id != 'sel':  # Não abre trocar match se clicou no checkbox
+            self.tree.selection_set(item)
+            self._abrir_trocar_match(event)
+
+    # ── Edição inline de valor (preço/estoque) ───────────────────────────────
+    def _editar_valor_inline(self, item_id):
+        """
+        Abre um simpledialog para editar o valor da coluna "depois"
+        (Preço Novo ou Est. Novo) de uma linha específica.
+
+        Valida que o input é numérico, atualiza preview_rows e df_bling,
+        e re-renderiza a linha no treeview.
+        """
+        row_idx = self._item_para_row_idx(item_id)
+        row     = self.resultado['preview_rows'][row_idx]
+
+        titulo = "Editar Estoque" if self.modo == 'estoque' else "Editar Preço"
+        prompt = "Novo estoque:" if self.modo == 'estoque' else "Novo preço (R$):"
+
+        novo_valor = simpledialog.askstring(
+            titulo, prompt,
+            initialvalue=str(row['depois']),
+            parent=self
+        )
+        if novo_valor is None:  # Cancelou
+            return
+
+        # Valida: aceita apenas decimais (ponto ou vírgula)
+        novo_valor = novo_valor.strip().replace(',', '.')
+        try:
+            valor_num = float(novo_valor)
+        except ValueError:
+            messagebox.showwarning("Valor Inválido",
+                                   f"'{novo_valor}' não é um número válido.",
+                                   parent=self)
+            return
+
+        # Atualiza dados
+        if self.modo == 'estoque':
+            fmt = lambda v: str(int(v)) if v == int(v) else f"{v:.2f}".replace('.', ',')
+            valor_formatado = fmt(valor_num)
+            row['depois'] = valor_formatado
+            # Atualiza df_bling
+            csv_idx = row.get('csv_idx')
+            if csv_idx is not None and 'Estoque' in self.resultado['df_bling'].columns:
+                self.resultado['df_bling'].at[csv_idx, 'Estoque'] = valor_formatado
+        else:
+            valor_formatado = formatar_moeda(valor_num)
+            preco_antigo = parse_moeda(str(row['antes']))
+            diff_preco = abs(valor_num - preco_antigo)
+            row['depois'] = valor_formatado
+            row['diff_preco'] = diff_preco
+            # Atualiza df_bling
+            csv_idx = row.get('csv_idx')
+            if csv_idx is not None and 'Preço' in self.resultado['df_bling'].columns:
+                self.resultado['df_bling'].at[csv_idx, 'Preço'] = valor_formatado
+
+        # Re-renderiza a linha no treeview
+        tag = self._tag_para_row(row)
+        gtin_display = (row.get('gtin') or '—')
+        sel_char = row.get('sel', '☑')
+        if self.modo == 'estoque':
+            novos_valores = (sel_char, row['sku'], row['descricao'],
+                             row['antes'], row['depois'], gtin_display)
+        else:
+            nome_xlsx_upd = (row.get('nome_xlsx')
+                             or row.get('nome_perfume') or '—')
+            novos_valores = (sel_char, row['sku'], nome_xlsx_upd,
+                             row['descricao'],
+                             row['antes'], row['depois'],
+                             row.get('custo', ''), gtin_display)
+        tags = [tag]
+        if sel_char == '☐':
+            tags.append('desmarcado')
+        self.tree.item(item_id, values=novos_valores, tags=tuple(tags))
+
+        self.log_callback(
+            f"✏️  Valor editado: SKU {row['sku']} → {valor_formatado}",
+            "info"
+        )
+        self._verificar_pode_confirmar()
+
     # ── Trocar match ──────────────────────────────────────────────────────────
     def _abrir_trocar_match(self, event=None):
         """
@@ -373,27 +531,133 @@ class PreviewWindow(tk.Toplevel):
             row_atualizado = self.resultado['preview_rows'][row_idx]
             tag = self._tag_para_row(row_atualizado)
             gtin_display = (row_atualizado.get('gtin') or '—')
+            sel_char = row_atualizado.get('sel', '☑')
             if self.modo == 'estoque':
-                novos_valores = (row_atualizado['sku'], row_atualizado['descricao'],
+                novos_valores = (sel_char, row_atualizado['sku'],
+                                 row_atualizado['descricao'],
                                  row_atualizado['antes'], row_atualizado['depois'],
                                  gtin_display)
             else:
                 nome_xlsx_upd = (row_atualizado.get('nome_xlsx')
                                  or row_atualizado.get('nome_perfume') or '—')
-                novos_valores = (row_atualizado['sku'], nome_xlsx_upd,
+                novos_valores = (sel_char, row_atualizado['sku'], nome_xlsx_upd,
                                  row_atualizado['descricao'],
                                  row_atualizado['antes'], row_atualizado['depois'],
                                  row_atualizado.get('custo', ''), gtin_display)
-            self.tree.item(item_id, values=novos_valores, tags=(tag,))
+            tags = [tag]
+            if sel_char == '☐':
+                tags.append('desmarcado')
+            self.tree.item(item_id, values=novos_valores, tags=tuple(tags))
+            self._verificar_pode_confirmar()
+
+    # ── Verificação de conflitos e habilitação do botão ────────────────────────
+    def _verificar_pode_confirmar(self):
+        """
+        Verifica se o botão Confirmar deve ser habilitado ou desabilitado.
+
+        Condições de bloqueio do botão:
+          1. Conflito N:1 — dois ou mais marcados (☑) apontam para o mesmo csv_idx
+          (Não encontrados bloqueiam a exportação em _confirmar, não aqui, 
+           para que o usuário possa clicar e ver a lista no messagebox)
+
+        Atualiza self.btn_confirmar e self.lbl_aviso.
+        """
+        avisos = []
+        bloquear_botao = False
+
+        # ── 1. Conta linhas marcadas e verifica conflitos N:1 ──
+        marcados_csv_idx = []  # lista de csv_idx das linhas marcadas
+        n_marcados = 0
+        for row in self.resultado['preview_rows']:
+            if row.get('sel', '☑') == '☑':
+                n_marcados += 1
+                csv_idx = row.get('csv_idx')
+                if csv_idx is not None:
+                    marcados_csv_idx.append(csv_idx)
+
+        # Detecta duplicatas (N:1)
+        vistos = {}
+        conflitos = []
+        for idx in marcados_csv_idx:
+            vistos[idx] = vistos.get(idx, 0) + 1
+        for idx, count in vistos.items():
+            if count > 1:
+                conflitos.append(idx)
+
+        if conflitos:
+            avisos.append(
+                f"⚠️ Conflito N:1 — {len(conflitos)} produto(s) do CSV com múltiplas associações marcadas. "
+                f"Desmarque uma das duplicatas."
+            )
+            bloquear_botao = True
+
+        # ── 2. Não encontrados não resolvidos (apenas modo preço) ──
+        if self.modo != 'estoque':
+            nao_enc = self.resultado.get('nao_encontrados', [])
+            if nao_enc:
+                avisos.append(
+                    f"⚠️ {len(nao_enc)} produto(s) sem associação ao CSV. A exportação será bloqueada (clique Confirmar para ver a lista)."
+                )
+
+        # Atualiza UI
+        if avisos:
+            self.lbl_aviso.config(text="\n".join(avisos))
+        else:
+            self.lbl_aviso.config(text=f"{n_marcados} produto(s) marcado(s) para exportação." if n_marcados else "")
+
+        if bloquear_botao:
+            self.btn_confirmar.config(state=tk.DISABLED, bg="#3a3a4a", fg="#888899")
+        else:
+            self.btn_confirmar.config(state=tk.NORMAL, bg="#15803d", fg="white")
 
     def _confirmar(self):
         """
         Chamado quando o usuário clica "✅ Confirmar e Exportar".
 
+        Antes de salvar:
+          - Verifica não encontrados (modo preço)
+          - Loga e remove linhas desmarcadas (☐)
+
         Salva o CSV via salvar_resultado() e fecha a janela.
         O atributo `confirmado` é verificado pela PerfumariaApp após
         o wait_window() para saber se o usuário confirmou ou cancelou.
         """
+        # ── Item 6: Bloqueio se há não-associados (modo preço) ─────
+        if self.modo != 'estoque':
+            nao_enc = self.resultado.get('nao_encontrados', [])
+            if nao_enc:
+                messagebox.showerror(
+                    "Exportação Bloqueada",
+                    f"{len(nao_enc)} produto(s) não foram associados ao CSV:\n\n"
+                    + "\n".join(f"  • {nome}" for nome in nao_enc[:15])
+                    + (f"\n  ... e mais {len(nao_enc) - 15}" if len(nao_enc) > 15 else ""),
+                    parent=self
+                )
+                return
+
+        # ── Item 4: Log e remoção dos desmarcados ──────────────────
+        col_sku  = self.resultado.get('col_sku')
+        df_bling = self.resultado['df_bling']
+        linhas_manter = []
+        for row in self.resultado['preview_rows']:
+            if row.get('sel', '☑') == '☐':
+                # Linha desmarcada — loga e remove do indices_alterados
+                self.log_callback(
+                    f"ℹ️ EXCLUÍDO [SKU {row['sku']}]: {row['descricao']}",
+                    "alerta"
+                )
+                csv_idx = row.get('csv_idx')
+                if csv_idx is not None:
+                    self.resultado['indices_alterados'].discard(csv_idx)
+                elif col_sku:
+                    self.resultado['indices_alterados'] = {
+                        idx for idx in self.resultado['indices_alterados']
+                        if str(df_bling.at[idx, col_sku]).strip() != row['sku']
+                    }
+            else:
+                linhas_manter.append(row)
+        self.resultado['preview_rows'] = linhas_manter
+
         salvar_resultado(self.resultado, self.log_callback)
         self.confirmado = True
         self.destroy()
