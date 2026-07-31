@@ -1002,6 +1002,385 @@ class TrocarMatchDialog(tk.Toplevel):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+#  JANELA "VÁRIOS NUM SÓ"  (decomposição de produto composto)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+#  Quando a planilha do fornecedor tem um item como "ZAKAT VARIOS" com
+#  Estoque = 8, mas na realidade são 4 perfumes diferentes (2 de cada),
+#  esta janela permite decompor 1 item do XLSX em N produtos do CSV.
+#
+#  O usuário pode:
+#    - Adicionar linhas (combo CSV + campo quantidade)
+#    - Remover linhas individuais
+#    - Validar que a soma das quantidades ≤ estoque total (modo estoque)
+#    - Confirmar para gerar N reassociações independentes
+#
+#  Retorna uma lista de dicts, cada um com os dados para aplicar_reassociacao().
+# ──────────────────────────────────────────────────────────────────────────────
+
+class VariosNumSoWindow(tk.Toplevel):
+    COR_BG     = "#12122a"
+    COR_HEADER = "#1e1e3f"
+
+    def __init__(self, parent, item_data, csv_descs, modo_estoque=False):
+        """
+        Janela para decompor um produto do XLSX em múltiplos do CSV.
+
+        Parâmetros:
+          parent        — janela pai (ReassociarWindow)
+          item_data     — dict com dados do item XLSX (nome_perfume, quantidade_ml,
+                          valor_unitario, qtd_estoque)
+          csv_descs     — lista de tuplas (idx, desc) de todos os produtos do CSV
+          modo_estoque  — se True, valida soma de quantidades ≤ estoque total
+        """
+        super().__init__(parent)
+        self.item_data     = item_data
+        self.csv_descs     = csv_descs
+        self.modo_estoque  = modo_estoque
+        self.confirmado    = False
+        self.decomposicoes = []  # Resultado: lista de dicts {csv_idx, qtd_estoque, ...}
+
+        # Mapa reverso: texto da opção → índice no CSV
+        self._opcoes_csv = [f"[{idx}] {desc}" for idx, desc in csv_descs]
+        self._opcao_para_idx = {f"[{idx}] {desc}": idx for idx, desc in csv_descs}
+
+        self.title("📦  Vários num Só — Decomposição de Produto")
+        self.geometry("920x520")
+        self.configure(bg=self.COR_BG)
+        self.grab_set()
+        self.lift()
+        self.focus_force()
+        self.resizable(True, True)
+
+        self._linhas = []  # Lista de dicts {frame, var_combo, var_qty}
+        self._criar_widgets()
+
+    def _criar_widgets(self):
+        """
+        Cria a interface:
+          - Header com dados do item XLSX
+          - Área scrollável de linhas (combo CSV + quantidade)
+          - Botão "➕ Adicionar produto"
+          - Barra de status com soma/total
+          - Botões Aplicar/Cancelar
+        """
+        # ── Header com dados do item XLSX ──────────────────────────────
+        header = tk.Frame(self, bg=self.COR_HEADER, pady=10)
+        header.pack(fill=tk.X)
+        tk.Label(header, text="📦  Vários num Só — Decompor Produto Composto",
+                 font=("Helvetica", 12, "bold"),
+                 bg=self.COR_HEADER, fg="#c9a8ff").pack()
+        tk.Label(header,
+                 text="Associe múltiplos produtos do CSV a este item do XLSX.",
+                 font=("Segoe UI", 9),
+                 bg=self.COR_HEADER, fg="#aaaacc").pack()
+
+        # ── Info do item XLSX ─────────────────────────────────────────
+        frame_info = tk.Frame(self, bg="#1a1a2e", padx=16, pady=10)
+        frame_info.pack(fill=tk.X, padx=12, pady=(8, 4))
+
+        item = self.item_data
+        nome = item.get('nome_perfume', '?')
+        ml   = item.get('quantidade_ml', 100)
+        val  = item.get('valor_unitario', 0)
+        est  = item.get('qtd_estoque', 0) or 0
+
+        tk.Label(frame_info, text=f"XLSX:  {nome}",
+                 bg="#1a1a2e", fg="#ffd700",
+                 font=("Consolas", 10, "bold")).grid(row=0, column=0, sticky="w", columnspan=4)
+
+        info_text = f"Volume: {int(ml) if ml == int(ml) else ml}ml   |   "
+        info_text += f"Valor Unit.: US$ {val:.2f}   |   "
+        info_text += f"Estoque Total: {int(est) if est == int(est) else est} un"
+        tk.Label(frame_info, text=info_text,
+                 bg="#1a1a2e", fg="#aaaacc",
+                 font=("Segoe UI", 9)).grid(row=1, column=0, sticky="w", columnspan=4, pady=(4, 0))
+
+        # ── Botões de ação (Botton) ───────────────────────────────────
+        frame_btn = tk.Frame(self, bg=self.COR_BG, pady=10)
+        frame_btn.pack(side=tk.BOTTOM, fill=tk.X, padx=12)
+        tk.Button(frame_btn, text="✅  Aplicar Decomposição",
+                  bg="#15803d", fg="white",
+                  font=("Arial", 11, "bold"), relief="flat",
+                  cursor="hand2", padx=16, pady=6,
+                  command=self._aplicar).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Button(frame_btn, text="Cancelar",
+                  bg="#3a3a5c", fg="white",
+                  font=("Arial", 10), relief="flat",
+                  cursor="hand2", padx=16, pady=6,
+                  command=self.destroy).pack(side=tk.LEFT)
+
+        # ── Botão Adicionar ───────────────────────────────────────────
+        frame_add = tk.Frame(self, bg=self.COR_BG, pady=4)
+        frame_add.pack(side=tk.BOTTOM, fill=tk.X, padx=12)
+        tk.Button(frame_add, text="➕  Adicionar produto",
+                  bg="#3a3a5c", fg="white",
+                  font=("Segoe UI", 9), relief="flat",
+                  cursor="hand2", padx=12, pady=3,
+                  command=self._adicionar_linha).pack(side=tk.LEFT)
+        tk.Button(frame_add, text="➗  Repartir Igualmente",
+                  bg="#3a3a5c", fg="white",
+                  font=("Segoe UI", 9), relief="flat",
+                  cursor="hand2", padx=12, pady=3,
+                  command=self._repartir_igualmente).pack(side=tk.LEFT, padx=(10, 0))
+
+        # Label de status (soma / total)
+        self._lbl_status = tk.Label(frame_add, text="",
+                                     bg=self.COR_BG, fg="#aaaacc",
+                                     font=("Segoe UI", 9))
+        self._lbl_status.pack(side=tk.RIGHT, padx=8)
+
+        # ── Área scrollável de linhas ─────────────────────────────────
+        frame_scroll = tk.Frame(self, bg=self.COR_BG)
+        # Empacotamos o scroll frame por último, para que ele ocupe apenas o espaço restante!
+        frame_scroll.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=12, pady=4)
+
+        self._canvas = tk.Canvas(frame_scroll, bg=self.COR_BG, highlightthickness=0)
+        sb = ttk.Scrollbar(frame_scroll, orient="vertical", command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self._inner = tk.Frame(self._canvas, bg=self.COR_BG)
+        self._cw = self._canvas.create_window((0, 0), window=self._inner, anchor="nw")
+        self._inner.bind("<Configure>",
+                         lambda e: self._canvas.configure(scrollregion=self._canvas.bbox("all")))
+        self._canvas.bind("<Configure>",
+                          lambda e: self._canvas.itemconfig(self._cw, width=e.width))
+
+        # ── Cabeçalhos das colunas ────────────────────────────────────
+        header_row = tk.Frame(self._inner, bg="#1e1e3f", pady=4, padx=8)
+        header_row.pack(fill=tk.X)
+        tk.Label(header_row, text="Produto do CSV",
+                 bg="#1e1e3f", fg="#aaaaff",
+                 font=("Segoe UI", 9, "bold"), width=58, anchor="w").grid(row=0, column=0, sticky="w")
+        tk.Label(header_row, text="Qtd",
+                 bg="#1e1e3f", fg="#aaaaff",
+                 font=("Segoe UI", 9, "bold"), width=8, anchor="center").grid(row=0, column=1, padx=(8, 0))
+        tk.Label(header_row, text="",
+                 bg="#1e1e3f", width=4).grid(row=0, column=2)  # Espaço para botão remover
+
+        # Adiciona a primeira linha automaticamente
+        self._adicionar_linha()
+
+        self._atualizar_status()
+
+    def _adicionar_linha(self):
+        """
+        Adiciona uma nova linha (combo + campo quantidade + botão remover)
+        à lista de decomposição.
+        """
+        i = len(self._linhas)
+        bg_row = "#1a1a2e" if i % 2 == 0 else "#14142a"
+        row_frame = tk.Frame(self._inner, bg=bg_row, pady=5, padx=8)
+        row_frame.pack(fill=tk.X, pady=1)
+
+        var_combo = tk.StringVar(value="")
+        cb = ttk.Combobox(row_frame, textvariable=var_combo,
+                          values=self._opcoes_csv, width=58,
+                          font=("Consolas", 8))
+        cb.grid(row=0, column=0, sticky="w")
+
+        # Filtro em tempo real
+        def _filtrar(event, cb=cb, opcoes=self._opcoes_csv):
+            txt = cb.get().lower()
+            cb['values'] = [o for o in opcoes if txt in o.lower()] or opcoes
+        cb.bind("<KeyRelease>", _filtrar)
+
+        var_qty = tk.StringVar(value="1")
+        entry_qty = tk.Entry(row_frame, textvariable=var_qty,
+                              width=8, font=("Consolas", 9),
+                              justify="center")
+        entry_qty.grid(row=0, column=1, padx=(8, 4))
+        # Atualiza status quando a quantidade muda
+        var_qty.trace_add("write", lambda *_: self._atualizar_status())
+
+        # Botão remover linha
+        linha_info = {'frame': row_frame, 'var_combo': var_combo, 'var_qty': var_qty}
+        btn_rem = tk.Button(row_frame, text="🗑",
+                            bg=bg_row, fg="#ff4d4d",
+                            font=("Arial", 10), relief="flat",
+                            cursor="hand2", padx=4,
+                            command=lambda li=linha_info: self._remover_linha(li))
+        btn_rem.grid(row=0, column=2, padx=(4, 0))
+
+        self._linhas.append(linha_info)
+        self._atualizar_status()
+
+    def _repartir_igualmente(self):
+        """
+        Divide o estoque total igualmente entre as linhas atuais.
+        Avisa o usuário se houver sobra (resto da divisão).
+        """
+        if not self.modo_estoque:
+            return
+
+        n_linhas = len(self._linhas)
+        if n_linhas == 0:
+            return
+
+        try:
+            est_total = float(self.item_data.get('qtd_estoque', 0) or 0)
+            if est_total == int(est_total):
+                est_total = int(est_total)
+        except ValueError:
+            est_total = 0
+
+        if est_total <= 0:
+            return
+
+        qtd_por_linha = est_total // n_linhas
+        resto = est_total % n_linhas
+
+        for linha in self._linhas:
+            # Converte para int se não tiver casas decimais, ou float
+            linha['var_qty'].set(str(int(qtd_por_linha) if qtd_por_linha == int(qtd_por_linha) else qtd_por_linha))
+
+        if resto > 0:
+            messagebox.showinfo(
+                "Resto na divisão",
+                f"Foram distribuídas {qtd_por_linha} unidades para cada um dos {n_linhas} produtos.\n\n"
+                f"Atenção: restaram {resto} unidade(s) de estoque!\n"
+                f"Você deve adicioná-las manualmente nas quantidades acima.",
+                parent=self
+            )
+
+    def _remover_linha(self, linha_info):
+        """
+        Remove uma linha da lista de decomposição.
+        Mantém pelo menos 1 linha.
+        """
+        if len(self._linhas) <= 1:
+            messagebox.showwarning("Atenção",
+                                   "É necessário pelo menos 1 produto.",
+                                   parent=self)
+            return
+        if linha_info in self._linhas:
+            self._linhas.remove(linha_info)
+            linha_info['frame'].destroy()
+            self._atualizar_status()
+
+    def _soma_quantidades(self):
+        """Calcula a soma de todas as quantidades informadas."""
+        total = 0
+        for linha in self._linhas:
+            try:
+                qty = float(linha['var_qty'].get().replace(',', '.'))
+                total += qty
+            except (ValueError, TypeError):
+                pass
+        return total
+
+    def _atualizar_status(self):
+        """Atualiza o label de status com soma / estoque total."""
+        soma = self._soma_quantidades()
+        est_total = self.item_data.get('qtd_estoque', 0) or 0
+
+        def fmt(v):
+            return str(int(v)) if v == int(v) else f"{v:.1f}"
+
+        if self.modo_estoque:
+            cor = "#39ff14" if soma <= est_total else "#ff4d4d"
+            texto = f"Soma: {fmt(soma)} / {fmt(est_total)} un"
+        else:
+            cor = "#aaaacc"
+            texto = f"{len(self._linhas)} produto(s) | Soma qtd: {fmt(soma)}"
+
+        self._lbl_status.config(text=texto, fg=cor)
+
+    def _aplicar(self):
+        """
+        Valida e coleta as decomposições.
+
+        Validações:
+          - Pelo menos 1 linha preenchida
+          - Nenhum combo vazio
+          - Quantidades > 0
+          - No modo estoque: soma ≤ estoque total
+          - Sem csv_idx duplicados
+
+        Resultado em self.decomposicoes: lista de dicts prontos para
+        aplicar_reassociacao().
+        """
+        decomposicoes = []
+        csv_idxs_usados = set()
+
+        for i, linha in enumerate(self._linhas):
+            escolha = linha['var_combo'].get().strip()
+            qty_str = linha['var_qty'].get().strip().replace(',', '.')
+
+            # Validação: combo não vazio
+            if not escolha:
+                messagebox.showwarning(
+                    "Produto não selecionado",
+                    f"Linha {i + 1}: selecione um produto do CSV.",
+                    parent=self)
+                return
+
+            csv_idx = self._opcao_para_idx.get(escolha)
+            if csv_idx is None:
+                messagebox.showwarning(
+                    "Produto inválido",
+                    f"Linha {i + 1}: '{escolha}' não é um produto válido.",
+                    parent=self)
+                return
+
+            # Validação: duplicatas
+            if csv_idx in csv_idxs_usados:
+                messagebox.showwarning(
+                    "Produto duplicado",
+                    f"Linha {i + 1}: este produto já foi adicionado.\n"
+                    f"Use a quantidade para indicar mais de 1 unidade.",
+                    parent=self)
+                return
+            csv_idxs_usados.add(csv_idx)
+
+            # Validação: quantidade
+            try:
+                qty = float(qty_str)
+                if qty <= 0:
+                    raise ValueError
+            except (ValueError, TypeError):
+                messagebox.showwarning(
+                    "Quantidade inválida",
+                    f"Linha {i + 1}: '{linha['var_qty'].get()}' não é uma "
+                    f"quantidade válida (deve ser > 0).",
+                    parent=self)
+                return
+
+            decomposicoes.append({
+                'csv_idx'       : csv_idx,
+                'nome_perfume'  : self.item_data['nome_perfume'],
+                'quantidade_ml' : self.item_data.get('quantidade_ml', 100),
+                'valor_unitario': self.item_data.get('valor_unitario', 0),
+                'qtd_estoque'   : qty,
+            })
+
+        if not decomposicoes:
+            messagebox.showwarning("Atenção",
+                                   "Adicione pelo menos 1 produto.",
+                                   parent=self)
+            return
+
+        # Validação modo estoque: soma ≤ estoque total
+        if self.modo_estoque:
+            est_total = self.item_data.get('qtd_estoque', 0) or 0
+            soma = sum(d['qtd_estoque'] for d in decomposicoes)
+            if soma > est_total:
+                messagebox.showwarning(
+                    "Quantidade excedida",
+                    f"A soma das quantidades ({soma:.0f}) excede o estoque "
+                    f"total do XLSX ({est_total:.0f}).\n\n"
+                    f"Ajuste as quantidades.",
+                    parent=self)
+                return
+
+        self.decomposicoes = decomposicoes
+        self.confirmado = True
+        self.destroy()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 #  JANELA DE REASSOCIAÇÃO MANUAL  (não encontrados automáticos)
 # ──────────────────────────────────────────────────────────────────────────────
 #
@@ -1013,6 +1392,7 @@ class TrocarMatchDialog(tk.Toplevel):
 #  O usuário pode:
 #    - Escolher o produto correto para cada item
 #    - Deixar "(pular)" para ignorar o item
+#    - Clicar "📦 Vários num Só" para decompor um item em múltiplos
 #    - Clicar "Aplicar" para processar todos de uma vez
 #
 #  Os itens reassociados passam por aplicar_reassociacao() na logica,
@@ -1030,9 +1410,10 @@ class ReassociarWindow(tk.Toplevel):
         self.log_callback = log_callback
         self.confirmado   = False
         self.associacoes  = []      # Lista de dicts com as associações feitas
+        self._varios_data = {}      # {indice_combo: [decomposicoes]} — itens decompostos via VariosNumSo
 
         self.title("🔍  Reassociação Manual — Não Encontrados")
-        self.geometry("920x500")
+        self.geometry("1040x500")
         self.configure(bg=self.COR_BG)
         self.grab_set()
         self.lift()
@@ -1063,7 +1444,8 @@ class ReassociarWindow(tk.Toplevel):
                  font=("Helvetica", 12, "bold"),
                  bg=self.COR_HEADER, fg="#c9a8ff").pack()
         tk.Label(header,
-                 text="Escolha o produto do CSV correspondente. Deixe '(pular)' para ignorar.",
+                 text="Escolha o produto do CSV correspondente. Deixe '(pular)' para ignorar.  "
+                      "Use '📦 Vários' se 1 item do XLSX contém múltiplos perfumes.",
                  font=("Segoe UI", 9),
                  bg=self.COR_HEADER, fg="#aaaacc").pack()
 
@@ -1097,16 +1479,19 @@ class ReassociarWindow(tk.Toplevel):
             row    = tk.Frame(inner, bg=bg_row, pady=6, padx=8)
             row.pack(fill=tk.X, pady=1)
 
-            tk.Label(row, text=f"XLSX: {item['nome_perfume']}",
+            # Label do nome do XLSX — guardamos referência para atualizar
+            # quando o item for decomposto via VariosNumSo
+            lbl_nome = tk.Label(row, text=f"XLSX: {item['nome_perfume']}",
                      bg=bg_row, fg=self.COR_ALERTA,
                      font=("Consolas", 9, "bold"),
-                     width=38, anchor="w").grid(row=0, column=0, sticky="w")
+                     width=38, anchor="w")
+            lbl_nome.grid(row=0, column=0, sticky="w")
             tk.Label(row, text="→", bg=bg_row, fg="#888899",
                      font=("Arial", 12)).grid(row=0, column=1, padx=8)
 
             var = tk.StringVar(value="(pular — não associar)")
             cb  = ttk.Combobox(row, textvariable=var, values=opcoes_csv,
-                               width=58, font=("Consolas", 8))
+                               width=48, font=("Consolas", 8))
             cb.grid(row=0, column=2, sticky="w")
 
             # Filtro em tempo real: ao digitar, mostra apenas opções que contêm o texto
@@ -1114,6 +1499,19 @@ class ReassociarWindow(tk.Toplevel):
                 txt = cb.get().lower()
                 cb['values'] = [o for o in opcoes if txt in o.lower()] or opcoes
             cb.bind("<KeyRelease>", _filtrar)
+
+            # Botão "📦 Vários num Só" — abre a VariosNumSoWindow para este item
+            combo_idx = i  # Captura o índice para o closure
+            btn_varios = tk.Button(
+                row, text="📦 Vários",
+                bg="#92400e", fg="white",
+                font=("Segoe UI", 8, "bold"), relief="flat",
+                cursor="hand2", padx=6, pady=2,
+                command=lambda idx=combo_idx, it=item, v=var, cb_w=cb, lbl=lbl_nome:
+                    self._abrir_varios_num_so(idx, it, v, cb_w, lbl)
+            )
+            btn_varios.grid(row=0, column=3, padx=(6, 0))
+
             self._combos.append((item, var))
 
         # ── Botões de ação ────────────────────────────────────────────
@@ -1133,6 +1531,31 @@ class ReassociarWindow(tk.Toplevel):
                  bg=self.COR_BG, fg="#666677",
                  font=("Segoe UI", 8)).pack(side=tk.RIGHT, padx=8)
 
+    def _abrir_varios_num_so(self, combo_idx, item_data, var_combo, cb_widget, lbl_nome):
+        """
+        Abre a VariosNumSoWindow para decompor um item XLSX em múltiplos CSV.
+
+        Se o usuário confirmar, guarda as decomposições em self._varios_data
+        e atualiza visual do combo/label para indicar que o item foi decomposto.
+        """
+        modo_est = self.resultado.get('modo') == 'estoque'
+        csv_descs = self.resultado.get('csv_descricoes', [])
+
+        dlg = VariosNumSoWindow(self, item_data, csv_descs, modo_estoque=modo_est)
+        self.wait_window(dlg)
+
+        if dlg.confirmado and dlg.decomposicoes:
+            # Guarda as decomposições associadas a este índice de combo
+            self._varios_data[combo_idx] = dlg.decomposicoes
+
+            # Atualiza visual: desabilita combo e mostra resumo
+            n_prods = len(dlg.decomposicoes)
+            soma_qty = sum(d.get('qtd_estoque', 0) or 0 for d in dlg.decomposicoes)
+            resumo = f"📦 {n_prods} produtos ({int(soma_qty)} un)"
+            var_combo.set(resumo)
+            cb_widget.config(state="disabled")
+            lbl_nome.config(fg="#66aaff")  # Azul para indicar que foi decomposto
+
     def _aplicar(self):
         """
         Coleta todas as associações feitas e fecha a janela.
@@ -1141,10 +1564,19 @@ class ReassociarWindow(tk.Toplevel):
         e monta um dicionário com os dados necessários para
         aplicar_reassociacao() processar.
 
+        Itens marcados como "vários num só" emitem MÚLTIPLAS associações
+        (uma por produto CSV decomposto) em vez de uma só.
+
         A lista self.associacoes é lida pela PerfumariaApp após wait_window().
         """
         self.associacoes = []
-        for item, var in self._combos:
+        for combo_idx, (item, var) in enumerate(self._combos):
+            # Verifica se este item foi decomposto via VariosNumSo
+            if combo_idx in self._varios_data:
+                # Emite N reassociações independentes
+                self.associacoes.extend(self._varios_data[combo_idx])
+                continue
+
             escolha = var.get()
             if escolha.startswith("(pular") or not escolha.strip():
                 continue

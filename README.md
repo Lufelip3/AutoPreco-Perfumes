@@ -1,8 +1,10 @@
-# 💎 AutoPreço Perfumes
+# 💎 AutoPreço Perfumes (v2.1)
 
 Ferramenta desktop em **Python** para atualização automatizada de **preços** e **estoque** de perfumes no ERP [Bling](https://www.bling.com.br/).
 
-Recebe uma planilha XLSX do fornecedor e um CSV exportado do Bling, cruza os dados por nome de perfume com **algoritmo de matching fuzzy (Jaccard)**, calcula os preços finais aplicando câmbio e frete, e exporta um CSV pronto para reimportação no Bling.
+Recebe uma planilha XLSX do fornecedor e um CSV exportado do Bling, cruza os dados por nome de perfume com **algoritmo de matching fuzzy (Jaccard)**, calcula os preços finais aplicando câmbio e frete, suporta **decomposição 1:N ("Vários num Só")**, e exporta um CSV pronto para reimportação no Bling.
+
+> **🆕 Novidades da Versão 2.1**: Suporte completo a **produtos compostos (1:N)** com a janela *"Vários num Só"*, botão de divisão automática *"➗ Repartir Igualmente"* com alerta de sobras, e orquestração de múltiplas reassociações para um único item do fornecedor.
 
 ---
 
@@ -11,8 +13,8 @@ Recebe uma planilha XLSX do fornecedor e um CSV exportado do Bling, cruza os dad
 O programa é dividido em **dois arquivos** com responsabilidades bem separadas:
 
 ```
-interface_perfumaria.pyw  →  Tudo que o usuário VÊ e INTERAGE
-logica_perfumaria.py      →  Tudo que o programa CALCULA e PROCESSA
+interface_perfumaria.pyw  →  Tudo que o usuário VÊ e INTERAGE (Tkinter GUI, Popups, Modais)
+logica_perfumaria.py      →  Tudo que o programa CALCULA e PROCESSA (Pandas, Jaccard, Preços)
 ```
 
 A interface **nunca** faz cálculos de preço ou matching. A lógica **nunca** cria janelas ou exibe mensagens. A comunicação entre eles é feita via dicionários e callbacks.
@@ -54,7 +56,7 @@ O programa segue um pipeline linear com pontos de intervenção manual:
                         ▼
               ┌───────────────────────┐     ┌─────────────────────────┐
               │  6. REASSOCIAÇÃO      │ ──→ │  7. FILTRO DE VARIAÇÃO  │
-              │  MANUAL (janela)      │     │  (pergunta individual)  │
+              │  MANUAL (1:1 / 1:N)   │     │  (pergunta individual)  │
               └───────────────────────┘     └──────────┬──────────────┘
                                                        │
                         ┌──────────────────────────────┘
@@ -89,14 +91,12 @@ Os itens conflitantes são **removidos do mapeamento automático** e enviados pa
 
 Os preços/estoques são calculados e escritos no DataFrame do Pandas **em memória** — nenhum arquivo é salvo nesta etapa. Isso permite que o usuário revise tudo antes de gravar.
 
-#### 6. Reassociação Manual
+#### 6. Reassociação Manual (Suporte 1:1 e 1:N)
 
-Se há produtos não encontrados (incluindo os conflitantes), o programa abre uma janela com:
-- Lista de todos os itens pendentes
-- Um combobox filtrável para cada item, com todos os produtos do CSV
-- Opção de "pular" itens que não precisam ser associados
-
-A reassociação funciona **tanto no Modo Preço quanto no Modo Estoque**.
+Se há produtos não encontrados (incluindo os conflitantes), o programa abre a janela de Reassociação:
+- Lista de todos os itens pendentes com combobox filtrável.
+- **Associação 1:1**: selecione diretamente o produto correspondente do CSV.
+- **Associação 1:N ("📦 Vários")**: para itens como `"ZAKAT VARIOS"` (composto por múltiplos perfumes), abra a janela de decomposição e associe N produtos individuais do CSV com suas quantidades.
 
 #### 7. Filtro de Variação (só Modo Preço)
 
@@ -104,7 +104,7 @@ Para cada produto cuja variação de preço é menor que o limite configurado (p
 
 #### 8. Preview
 
-Janela modal com tabela completa de todos os produtos que serão exportados. Permite:
+Janela modal com tabela completa de todos os produtos que serão exportados (incluindo os decompostos de lote). Permite:
 - **Conferir** cada match visualmente
 - **Trocar** um match errado (duplo clique ou clique direito)
 - **Editar** o valor diretamente (duplo clique na coluna "Preço Novo" / "Est. Novo")
@@ -122,6 +122,12 @@ Ao clicar "Confirmar e Exportar", o programa:
 
 ## 📸 Funcionalidades
 
+### 🆕 Decomposição "Vários num Só" (Versão 2.1)
+- **Associação 1:N**: Associa um único item do XLSX (ex: `"ZAKAT VARIOS"` com 8 unidades) a múltiplos perfumes individuais no CSV do Bling (ex: 4 perfumes diferentes, 2 unidades de cada).
+- **Divisão Automática ("➗ Repartir Igualmente")**: Reparte a quantidade total do XLSX uniformemente entre os produtos adicionados.
+- **Gestão de Sobras / Restos**: Se a divisão não for exata (ex: 9 unidades divididas entre 4 itens = 2 para cada), o sistema aplica a divisão inteira (2) e emite um alerta informando quantas unidades sobraram para alocação manual.
+- **Validação Dinâmica de Estoque**: Valida em tempo real se a soma das quantidades atribuídas é menor ou igual ao estoque total do item do fornecedor.
+
 ### Modo Preço (padrão)
 - Importa CSV do Bling + XLSX do fornecedor
 - Cruza produtos por nome usando matching fuzzy inteligente
@@ -132,7 +138,7 @@ Ao clicar "Confirmar e Exportar", o programa:
 ### Modo Estoque
 - Atualiza **somente** a coluna Estoque do CSV
 - Substitui a quantidade no processamento automático
-- Soma quantidades na reassociação manual (não substitui)
+- Soma quantidades na reassociação manual (incluindo itens decompostos)
 - Requer coluna `Estoque (un)` no XLSX
 
 ### Matching Inteligente
@@ -156,7 +162,7 @@ Ao clicar "Confirmar e Exportar", o programa:
   | 🟡 Amarelo | `0 < Δ ≤ R$10` |
   | 🟠 Laranja | `R$10 < Δ < R$80` |
   | 🔴 Vermelho | `Δ ≥ R$80` |
-  | 🔵 Azul | Corrigido manualmente (reassociado) |
+  | 🔵 Azul | Corrigido manualmente (reassociado / decomposto) |
 
 ### Correção Manual
 - **Trocar match** no Preview: duplo clique ou clique direito na linha
@@ -164,7 +170,7 @@ Ao clicar "Confirmar e Exportar", o programa:
   - Botão "Ignorar e tentar novamente" — roda Jaccard excluindo candidatos já rejeitados
   - Suporta múltiplas tentativas por produto
 - **Reassociação manual** de produtos não encontrados e conflitantes
-  - Janela dedicada com combobox filtrável para cada item
+  - Suporta associação simples (1:1) e decomposição em lote (1:N via botão **📦 Vários**)
   - Itens reassociados aparecem em azul no Preview com tag `REASSOC.`
   - Funciona em ambos os modos (Preço e Estoque)
 - **Editar valor** diretamente no preview (duplo clique no preço/estoque novo)
@@ -184,6 +190,7 @@ Ao clicar "Confirmar e Exportar", o programa:
 - Processamento em **thread separada** — UI nunca trava
 - Comunicação via `queue.Queue` thread-safe
 - Diálogos sempre visíveis (`parent=self.root` + `lift()` + `focus_force()`)
+- Layouts responsivos com garantia de ancoragem de botões no rodapé (`side=tk.BOTTOM`)
 - Tratamento robusto de `NaN` em células vazias do XLSX
 - Auto-instalação de dependências na primeira execução
 
@@ -193,17 +200,17 @@ Ao clicar "Confirmar e Exportar", o programa:
 
 ```
 AutoPreco Perfumes/
-├── interface_perfumaria.pyw   # Interface gráfica (Tkinter) — ponto de entrada
-├── logica_perfumaria.py       # Toda a lógica de negócio: leitura, matching, cálculo
-├── README.md                  # Este arquivo
+├── interface_perfumaria.pyw   # Interface gráfica (Tkinter) — ponto de entrada e janelas visuais
+├── logica_perfumaria.py       # Toda a lógica de negócio: leitura, matching, cálculo, reambiguação
+├── README.md                  # Documentação completa do projeto
 ├── .gitignore                 # Exclui .csv, .xlsx e arquivos temporários
 └── prompt_transcrever_nota.md # Prompt auxiliar (referência)
 ```
 
 | Arquivo | Responsabilidade |
 |---------|-----------------|
-| `logica_perfumaria.py` | Leitura de CSV/XLSX, normalização de texto, Jaccard scoring, mapeamento de colunas, detecção de conflitos, cálculo de preços, reassociação, exportação do CSV final |
-| `interface_perfumaria.pyw` | Janela principal, campos de entrada, log visual colorido, preview modal, troca de match inline, edição de valor, checkbox de seleção, reassociação manual, menu de contexto |
+| `logica_perfumaria.py` | Leitura de CSV/XLSX, normalização de texto, Jaccard scoring, mapeamento de colunas, detecção de conflitos, cálculo de preços, aplicação de reassociações simples e múltiplas, exportação do CSV final |
+| `interface_perfumaria.pyw` | Janela principal (`PerfumariaApp`), preview modal (`PreviewWindow`), troca de match (`TrocarMatchDialog`), reassociação manual (`ReassociarWindow`) e decomposição em lote (`VariosNumSoWindow`) |
 
 ---
 
@@ -221,7 +228,7 @@ AutoPreco Perfumes/
 python interface_perfumaria.pyw
 ```
 
-### Passo a passo
+### Passo a Passo — Processamento Padrão
 
 1. **Selecionar CSV do Bling** — exportado com as colunas de produtos
 2. **Selecionar XLSX do Fornecedor** — planilha com nomes, quantidades e valores
@@ -230,17 +237,12 @@ python interface_perfumaria.pyw
    - 🚚 Percentual de frete (deixe vazio ou 0 para ignorar)
    - 🔔 Limite de variação para alerta individual
 4. **Clicar em "Processar"**
-5. **Resolver não encontrados** — se houver, a janela de reassociação abre automaticamente
+5. **Resolver não encontrados**:
+   - Para itens 1:1, escolha o produto no combobox.
+   - Para itens compostos (ex: `"ZAKAT VARIOS"`), clique em **"📦 Vários"**, adicione os perfumes, clique em **"➗ Repartir Igualmente"** e confirme.
 6. **Responder filtro de variação** — para variações pequenas, confirmar produto a produto
 7. **Revisar o Preview** — conferir cada linha, trocar matches errados, editar valores, marcar/desmarcar linhas
 8. **Confirmar e Exportar** — gera `perfumes_atualizados.csv` na mesma pasta do CSV original
-
-### Modo Estoque
-
-1. Marcar checkbox **"📦 Modo Estoque"**
-2. Campos de cotação, frete e limite ficam desabilitados
-3. O XLSX precisa ter a coluna `Estoque (un)`
-4. Processar → Reassociar (se necessário) → Preview → Confirmar
 
 ---
 
@@ -290,27 +292,6 @@ O preço final sempre termina em **,90** (precificação psicológica):
 arredondar_preco(valor) = round(valor / 10) * 10 - 0.10
 ```
 
-### Exemplo completo
-
-| Etapa | Cálculo | Resultado |
-|-------|---------|-----------|
-| Valor unitário (XLSX) | — | US$ 15.00 |
-| Cotação do dólar | — | R$ 5.50 |
-| Frete | — | 10% |
-| **Preço de Compra** | 15.00 × 5.50 | R$ 82,50 |
-| **Preço de Custo** | 82.50 × 1.10 | R$ 90,75 |
-| **Preço de Venda** | arredonda(90.75 × 2) = arredonda(181.50) | **R$ 179,90** |
-
-### Descrição do Fornecedor
-
-Para cada produto processado, o programa gera automaticamente uma string padronizada para o campo "Descrição do Produto no Fornecedor" do Bling:
-
-```
-NOME DO PERFUME 100ML 3.4 FL.OZ.
-```
-
-Se a quantidade em ml não estiver disponível, assume 100ml como fallback.
-
 ---
 
 ## 🧠 Algoritmo de Matching
@@ -319,113 +300,56 @@ O matching entre XLSX (fornecedor) e CSV (Bling) funciona em **2 passadas**:
 
 ### Passada 1 — Mapeamento Jaccard
 
-Para cada perfume do XLSX:
-
 1. **Remove prefixos de fragrância** (`Eau de Parfum`, `EDP`, `PERF`, `Cologne`, etc.)
 2. **Normaliza texto** (lowercase, remove acentos via decomposição Unicode NFKD)
 3. **Remove códigos numéricos** (tokens que começam com dígito: `2230`, `100M6173`)
 4. **Filtra stopwords** do domínio de perfumaria (`de`, `da`, `eau`, `ml`, `parfum`, etc.)
 5. **Extrai palavras significativas** — resultado é um SET (ordem não importa)
-6. **Calcula Jaccard Score fuzzy** contra todos os produtos do CSV
-
-#### Jaccard Fuzzy
-
-O Jaccard clássico é `|A ∩ B| / |A ∪ B|`, mas aqui usamos uma versão "fuzzy": duas palavras são consideradas par se:
-
-- Uma é **prefixo** da outra (fornecedores abreviam: `"Marshm"` → `"Marshmallow"`)
-- A **similaridade** (SequenceMatcher) é ≥ 78% (`"Musaman"` vs `"Musamam"` → ~85%)
-
-#### Critérios de Aceitação
-
-Um match é aceito se:
-1. **TODAS** as palavras do XLSX têm ao menos 1 par fuzzy no CSV — evita `"Aseel Maison Asrar"` bater em `"Rey Maison Asrar"` só porque `"Maison"` + `"Asrar"` casam
-2. **Score ≥ 0.35** OU **cobertura 100%** — a regra de cobertura resolve produtos de 1 palavra (ex: `"Aabinus"` com Jaccard 0.33, abaixo do mínimo, mas 100% de cobertura)
-
-#### Stopwords e Palavras Distintivas
-
-Palavras como `"intense"`, `"masc"` **NÃO** são ignoradas de propósito:
-- `"Club Nuit Intense"` é um produto DIFERENTE de `"Club Nuit"`
-- Remover essas palavras causaria falsos positivos
+6. **Calcula Jaccard Score fuzzy** contra todos os produtos do CSV (threshold 78% / prefixos)
 
 ### Passada 2 — Detecção e Resolução de Conflitos
 
-- Se 2+ produtos do XLSX apontam para o mesmo CSV → **conflito**
-- Os itens conflitantes são **removidos** do mapeamento automático
-- São **adicionados** à lista de "não encontrados" para reassociação manual
-- O usuário resolve via dropdown na janela de reassociação, apontando cada um para o produto correto
+- Se 2+ produtos do XLSX apontam para o mesmo CSV → **conflito N:1**
+- Os itens conflitantes são enviados para a tela de Reassociação Manual
+- Permite associação 1:1 direta ou decomposição 1:N via **"Vários num Só"**
 
 ---
 
 ## 🖥 Interface Gráfica — Classes e Janelas
 
 ### `PerfumariaApp` — Janela Principal
-
-A classe principal que gerencia toda a aplicação:
-
-- **Campos de entrada**: CSV, XLSX, cotação do dólar, frete, limite de variação
-- **Checkbox Modo Estoque**: alterna visual (roxo → âmbar) e desabilita campos de preço
-- **Botão Processar**: inicia thread de processamento, muda para "⏳ Processando..."
-- **Log visual**: Text widget com tags de cor (verde=sucesso, vermelho=erro, amarelo=alerta, azul=info)
-- **Orquestração pós-processamento**: reassociação → filtro variação → preview
+A classe principal que gerencia toda a aplicação, orquestração de threads e logs.
 
 ### `PreviewWindow` — Janela de Preview
-
-Tabela modal com todos os produtos prontos para exportação:
-
-- **Treeview** estilizado em dark mode com scrollbars
-- **Checkbox por linha** (☑/☐) para marcar/desmarcar
-- **Duplo clique** na coluna de valor → edição inline
-- **Duplo clique** em outras colunas → abre `TrocarMatchDialog`
-- **Clique direito** → menu de contexto (trocar match ou remover)
-- **Validação N:1**: desabilita botão Confirmar se há duplicatas marcadas
-- **Bloqueio de exportação**: no Modo Preço, impede exportar se há produtos não associados
+Tabela modal com todos os produtos prontos para exportação. Suporta seleção com checkboxes, edição inline e menu de contexto.
 
 ### `TrocarMatchDialog` — Trocar Match
-
-Permite corrigir um match errado do algoritmo:
-
-- Mostra nome do XLSX e match atual
-- Combobox filtrável com todos os produtos do CSV
-- Botão "Ignorar e tentar novamente" → roda Jaccard excluindo candidatos já rejeitados
-- Suporta **múltiplas tentativas** (set de excluídos cresce a cada tentativa)
+Permite corrigir um match errado do algoritmo individualmente no preview.
 
 ### `ReassociarWindow` — Reassociação Manual
+Exibe lista de itens não encontrados / conflitantes. Apresenta o combobox individual e o botão **"📦 Vários"** por linha.
 
-Para produtos não encontrados e conflitantes:
-
-- Lista scrollável com canvas + frame interno (scroll frame manual do Tkinter)
-- Um combobox filtrável por item, com opção "(pular)"
-- Zebra striping para facilitar leitura
-- Funciona em Modo Preço e Modo Estoque
-
----
-
-## 🛡 Mecanismos de Segurança
-
-| Mecanismo | O que evita |
-|-----------|-------------|
-| Processamento em memória | Nenhum arquivo é gravado até o usuário confirmar no Preview |
-| Detecção de conflitos N:1 | Impede que dois perfumes sobreescrevam o mesmo SKU silenciosamente |
-| Bloqueio de exportação (não associados) | No Modo Preço, impede exportar se há itens pendentes |
-| Remoção da lista fantasma | Ao reassociar, remove o item da lista de bloqueio — evita bloqueio indevido |
-| Filtro de variação | Pergunta individualmente para preços com variação pequena |
-| Checkbox de seleção | Permite excluir linhas específicas sem remover do preview |
-| Exportação parcial | Grava somente as linhas alteradas, não o CSV inteiro |
-| Thread separada + Queue | Evita travar a UI durante processamento pesado |
-| Auto-instalação de dependências | Verifica e instala `pandas` e `openpyxl` automaticamente |
+### 🆕 `VariosNumSoWindow` — Decomposição de Lote (v2.1)
+Janela modal dedicada a desmembrar um item do XLSX em múltiplos produtos do CSV:
+- Adição/Remoção dinâmica de linhas (combo do CSV + campo de quantidade).
+- Botão **"➗ Repartir Igualmente"** com cálculo de restos e pop-up informativo.
+- Barra de status com totalizadores e validação contínua de estoque.
+- Empacotamento de layout corrigido no rodapé (`side=tk.BOTTOM`).
 
 ---
 
-## 🛠 Tecnologias
+## 🔖 Histórico de Versões
 
-- **Python 3.8+**
-- **Tkinter** — interface gráfica nativa
-- **Pandas** — manipulação de dados CSV/XLSX
-- **openpyxl** — leitura de arquivos Excel (.xlsx)
-- **difflib** — similaridade de strings (SequenceMatcher) para matching fuzzy
-- **threading + queue** — processamento assíncrono sem travar a UI
-- **unicodedata** — normalização de acentos (NFKD)
-- **re** — remoção de prefixos de fragrância e códigos numéricos
+### **v2.1** (Atual)
+- ✨ **Suporte a Associação 1:N ("Vários num Só")**: Permite decompor um item do XLSX em múltiplos produtos do CSV do Bling.
+- ➗ **Divisão Automática de Quantidades**: Novo botão "Repartir Igualmente" com tratamento inteligente de sobras/restos de divisão.
+- 🎨 **Correção de Layout em Telas Menores**: Reestruturação do empacotamento (`pack`) em modais para garantir visibilidade permanente dos botões no rodapé.
+- ⚡ **Orquestração de Reassociações Múltiplas**: Atualização da ponte de dados entre GUI e Engine de Cálculo para emitir N atualizações a partir de 1 registro.
+
+### **v2.0**
+- 📦 Suporte completo ao **Modo Estoque**.
+- 🔍 Visualização avançada em **Dark Mode** com temas customizados.
+- 🛡 Travas de segurança para conflitos N:1 e verificação de itens não associados.
 
 ---
 
