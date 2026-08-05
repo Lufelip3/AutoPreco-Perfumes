@@ -706,13 +706,14 @@ def processar_perfumaria(arquivo_csv, arquivo_xlsx, cotacao_dolar, taxa_frete,
                 )
                 continue
 
-            # Lê o estoque atual do CSV e formata a nova quantidade.
-            # Nota: aqui o estoque é SUBSTITUÍDO, não somado. A soma é feita
-            # na reassociação manual (aplicar_reassociacao).
-            estoque_antigo = str(df_bling.at[csv_idx, 'Estoque']).strip() \
+            # Lê o estoque atual do CSV e SOMA com a nova quantidade.
+            estoque_antigo_str = str(df_bling.at[csv_idx, 'Estoque']).strip() \
                 if 'Estoque' in df_bling.columns else '0'
-            qtd_fmt = str(int(qtd_estoque)) if qtd_estoque == int(qtd_estoque) \
-                else f"{qtd_estoque:.2f}".replace('.', ',')
+            estoque_antigo = parse_moeda(estoque_antigo_str) or 0.0
+            estoque_novo = estoque_antigo + qtd_estoque
+            qtd_fmt = str(int(estoque_novo)) if estoque_novo == int(estoque_novo) \
+                else f"{estoque_novo:.2f}".replace('.', ',')
+            estoque_antigo = estoque_antigo_str  # mantém string original para o log
 
             if 'Estoque' in df_bling.columns:
                 df_bling.at[csv_idx, 'Estoque'] = qtd_fmt
