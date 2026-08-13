@@ -8,7 +8,23 @@ Recebe uma planilha XLSX do fornecedor e um CSV exportado do Bling, cruza os dad
 
 ---
 
+## 📋 Índice
+
+- [Visão Geral da Arquitetura](#-visão-geral-da-arquitetura)
+- [Fluxo Completo de Processamento](#-fluxo-completo-de-processamento)
+- [Funcionalidades](#-funcionalidades)
+- [Estrutura do Projeto](#-estrutura-do-projeto)
+- [Como Usar](#-como-usar)
+- [Colunas Esperadas](#-colunas-esperadas)
+- [Lógica de Preços](#️-lógica-de-preços)
+- [Algoritmo de Matching](#-algoritmo-de-matching)
+- [Interface Gráfica — Classes e Janelas](#-interface-gráfica--classes-e-janelas)
+- [Histórico de Versões](#-histórico-de-versões)
+
+---
+
 ## 📐 Visão Geral da Arquitetura
+
 
 O programa é dividido em **dois arquivos** com responsabilidades bem separadas:
 
@@ -279,7 +295,7 @@ Colunas utilizadas (nomes padrão do Bling):
 
 ### Fórmula
 
-```
+```text
 Preço de Compra = Valor Unitário (XLSX) × Cotação do Dólar
 Preço de Custo  = Preço de Compra × (1 + Frete%)
 Preço de Venda  = arredonda(Preço de Custo × 2)  → termina em ,90
@@ -287,10 +303,13 @@ Preço de Venda  = arredonda(Preço de Custo × 2)  → termina em ,90
 
 ### Arredondamento
 
-O preço final sempre termina em **,90** (precificação psicológica):
-```
-arredondar_preco(valor) = round(valor / 10) * 10 - 0.10
-```
+O preço final sempre termina em **,90** (precificação psicológica).
+A regra olha o **dígito das unidades** da parte inteira do valor calculado:
+
+| Dígito das unidades | Direção | Exemplo |
+|---|---|---|
+| `< 5` | Desce para o X9,90 anterior | 154,10 → **149,90** |
+| `≥ 5` | Sobe para o X9,90 seguinte | 158,77 → **159,90** |
 
 ---
 
