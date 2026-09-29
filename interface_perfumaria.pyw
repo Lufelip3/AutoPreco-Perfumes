@@ -139,9 +139,16 @@ class PreviewWindow(tk.Toplevel):
         """
         Cria todos os widgets da janela de preview:
           - Header com contagem de produtos e alerta de GTIN
+          - Barra de desconto global (somente modo preço)
           - Treeview (tabela) com scrollbars
           - Botões "Confirmar" e "Cancelar"
           - Legenda de cores
+
+        Funcionalidades de edição de preço:
+          - Desconto global: campo % na barra superior → recalcula todos
+            via arredondar_preco(custo×2 × (1 - pct/100))
+          - Edição individual: duplo clique na coluna "Preço Novo" OU
+            clique direito → "Editar preço"
         """
         # ── Cabeçalho ─────────────────────────────────────────────────
         header = tk.Frame(self, bg="#0d0d1a", pady=10)
@@ -160,8 +167,47 @@ class PreviewWindow(tk.Toplevel):
                      font=("Segoe UI", 9),
                      bg="#0d0d1a", fg=self.COR_GTIN_LAR).pack()
         tk.Label(header,
-                 text="Duplo clique ou clique direito em qualquer linha para trocar o produto do CSV.",
+                 text="Duplo clique na coluna 'Preço Novo' para editar.  Clique direito para mais opções.",
                  font=("Segoe UI", 8), bg="#0d0d1a", fg="#666688").pack()
+
+        # ── Barra de desconto global (somente modo preço) ─────────────
+        #  Permite aplicar um desconto percentual em TODOS os produtos
+        #  de uma vez. O cálculo respeita a fórmula original:
+        #    preço = arredondar_preco(custo × 2 × (1 - pct/100))
+        #  Ficará oculta no modo estoque.
+        if modo != 'estoque':
+            frame_desc = tk.Frame(self, bg="#1a1a35", pady=6)
+            frame_desc.pack(fill=tk.X, padx=12, pady=(0, 4))
+
+            tk.Label(frame_desc, text="🏷️  Desconto global:",
+                     bg="#1a1a35", fg="#c9a8ff",
+                     font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(6, 4))
+
+            self._var_desconto = tk.StringVar(value="0")
+            entry_desc = tk.Entry(frame_desc, textvariable=self._var_desconto,
+                                  width=6, font=("Consolas", 10),
+                                  bg="#0d0d1a", fg="#ffffff",
+                                  insertbackground="white",
+                                  relief="flat", bd=2,
+                                  justify="center")
+            entry_desc.pack(side=tk.LEFT, padx=(0, 2))
+            tk.Label(frame_desc, text="%",
+                     bg="#1a1a35", fg="#aaaacc",
+                     font=("Segoe UI", 10)).pack(side=tk.LEFT, padx=(0, 10))
+
+            tk.Button(frame_desc, text="Aplicar a todos",
+                      bg="#7c3aed", fg="white",
+                      font=("Segoe UI", 9, "bold"),
+                      relief="flat", cursor="hand2", padx=10, pady=3,
+                      activebackground="#6d28d9",
+                      command=self._aplicar_desconto).pack(side=tk.LEFT)
+
+            tk.Label(frame_desc,
+                     text="  ex: 20 → aplica 20% de desconto antes do arredondamento para ,90",
+                     bg="#1a1a35", fg="#555577",
+                     font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=8)
+        else:
+            self._var_desconto = None
 
         # ── Treeview (tabela de dados) ────────────────────────────────
         #  O Treeview do ttk é o widget "tabela" do Tkinter. Ele suporta
@@ -248,6 +294,9 @@ class PreviewWindow(tk.Toplevel):
                              activebackground="#3a3a6e")
         self._menu.add_command(label="✏️  Trocar produto do CSV",
                                command=self._abrir_trocar_match)
+        if modo != 'estoque':
+            self._menu.add_command(label="💲  Editar preço desta linha",
+                                   command=self._editar_via_menu)
         self._menu.add_command(label="🗑  Remover desta exportação",
                                command=self._remover_linha)
 
@@ -319,6 +368,93 @@ class PreviewWindow(tk.Toplevel):
             if sel_char == '☐':
                 tags.append('desmarcado')
             self.tree.insert("", tk.END, values=valores, tags=tuple(tags))
+
+    # ── Desconto global (barra de desconto) ───────────────────────────────────
+    def _aplicar_desconto(self):
+        """
+        Aplica um desconto percentual em TODOS os produtos do preview.
+
+        Fórmula:
+          preço_novo = arredondar_preco(custo × 2 × (1 - pct/100))
+
+        O campo 'custo' em preview_rows contém o custo calculado pela
+        Passada 2 (valor_unitario × cotação × (1 + frete%)).
+        Multiplicando por 2 e aplicando o desconto antes do arredondamento
+        para ,90, mantemos a consistência com a fórmula original.
+
+        Se algum produto não tiver 'custo' armazenado (ex: reassociado
+        sem custo), usa o 'depois' atual como fallback.
+        """
+        pct_str = (self._var_desconto.get() if self._var_desconto else '0').strip()
+        pct_str = pct_str.replace(',', '.')
+        try:
+            pct = float(pct_str)
+        except ValueError:
+            messagebox.showwarning(
+                "Desconto inválido",
+                f"'{pct_str}' não é um número válido.\n"
+                f"Digite um número como 20 ou 15,5.",
+                parent=self
+            )
+            return
+        if not (0 <= pct < 100):
+            messagebox.showwarning(
+                "Desconto inválido",
+                "O desconto deve estar entre 0% e 99,9%.",
+                parent=self
+            )
+            return
+
+        fator = 1.0 - pct / 100.0
+        df_bling = self.resultado['df_bling']
+        alterados = 0
+
+        for r in self.resultado['preview_rows']:
+            custo_str = r.get('custo', '')
+            if custo_str:
+                custo_num = parse_moeda(str(custo_str))
+            else:
+                # Fallback: tenta inferir o custo a partir do preço atual/2
+                custo_num = parse_moeda(str(r.get('depois', '0'))) / 2.0
+
+            if custo_num <= 0:
+                continue  # Sem custo válido, pula
+
+            preco_base      = custo_num * 2          # markup ×2
+            preco_com_desc  = preco_base * fator      # aplica desconto
+            preco_final     = arredondar_preco(preco_com_desc)  # arredonda para ,90
+            preco_fmt       = formatar_moeda(preco_final)
+
+            preco_antigo_num = parse_moeda(str(r.get('antes', '0')))
+            diff             = abs(preco_final - preco_antigo_num)
+
+            r['depois']     = preco_fmt
+            r['diff_preco'] = diff
+
+            # Atualiza df_bling para que a exportação use o novo preço
+            csv_idx = r.get('csv_idx')
+            if csv_idx is not None and 'Preço' in df_bling.columns:
+                df_bling.at[csv_idx, 'Preço'] = preco_fmt
+
+            alterados += 1
+
+        self._popular_tabela(self.modo)
+        self._verificar_pode_confirmar()
+
+        msg = (f"✂️  Desconto de {pct:.1f}% aplicado a {alterados} produto(s)."
+               if pct > 0
+               else f"↩️  Desconto removido — preços recalculados sem desconto ({alterados} produto(s)).")
+        self.log_callback(msg, "alerta")
+
+    # ── Editar preço via menu de contexto ─────────────────────────────────────
+    def _editar_via_menu(self):
+        """
+        Atalho para _editar_valor_inline usando a linha atualmente selecionada.
+        Chamado pelo item 'Editar preço desta linha' no menu de contexto.
+        """
+        sel = self.tree.selection()
+        if sel:
+            self._editar_valor_inline(sel[0])
 
     # ── Menu contexto ─────────────────────────────────────────────────────────
     def _menu_contexto(self, event):
@@ -982,7 +1118,7 @@ class TrocarMatchDialog(tk.Toplevel):
                 'sku': novo_sku, 'descricao': nova_desc,
                 'antes': preco_antigo, 'depois': preco_novo,
                 'gtin': novo_gtin, 'diff_preco': diff_preco,
-                'variacao_pequena': (0 < diff_preco < limite),
+                'variacao_pequena': (0 < diff_preco <= limite),
                 'custo': formatar_moeda(preco_custo),
                 'compra': formatar_moeda(preco_compra),
                 'reassociado': True,
@@ -2064,43 +2200,41 @@ class PerfumariaApp:
 
         # ── Pergunta individual para cada variação pequena ─────────────
         #  Se a diferença de preço é menor que o limite configurado,
-        #  pergunta para CADA produto individualmente se deve atualizar.
-        #  Isso evita atualizar preços que mal mudaram (ex: Δ R$ 0,50)
-        #  e potencialmente desalinhar com comparadores de preço.
+        #  pergunta se deve aplicar o novo preço.
+        #  "Sim" → exporta com preço novo.
+        #  "Não" → reverte para o preço antigo, mas o produto AINDA É
+        #          exportado (fica no indices_alterados).
+        #  A única razão para um produto não ser exportado é não ter
+        #  match no CSV (tratado na Passada 1).
         if not modo_est:
-            excluir_skus = set()
+            df_bling = resultado['df_bling']
             for r in list(resultado['preview_rows']):
                 if not r.get('variacao_pequena'):
                     continue
-                incluir = messagebox.askyesno(
+                aplicar = messagebox.askyesno(
                     "Variação Pequena — Confirmar?",
                     f"SKU {r['sku']}\n{r['descricao']}\n\n"
                     f"Preço atual : R$ {r['antes']}\n"
                     f"Preço novo  : R$ {r['depois']}\n"
                     f"Variação    : Δ R$ {r['diff_preco']:.2f}\n\n"
-                    f"Deseja atualizar este produto?",
+                    f"Deseja aplicar o novo preço?\n"
+                    f"(O produto será exportado de qualquer forma.)",
                     parent=self.root
                 )
-                if not incluir:
-                    excluir_skus.add(r['sku'])
-
-            # Remove os produtos que o usuário disse "Não"
-            if excluir_skus:
-                col_sku  = resultado.get('col_sku')
-                df_bling = resultado['df_bling']
-                resultado['preview_rows'] = [
-                    r for r in resultado['preview_rows']
-                    if r['sku'] not in excluir_skus
-                ]
-                if col_sku:
-                    resultado['indices_alterados'] = {
-                        idx for idx in resultado['indices_alterados']
-                        if str(df_bling.at[idx, col_sku]).strip() not in excluir_skus
-                    }
-                self.log(
-                    f"ℹ️  {len(excluir_skus)} produto(s) excluído(s) pelo filtro de variação.",
-                    "alerta"
-                )
+                if not aplicar:
+                    # Reverte o preço no DataFrame para o valor antigo,
+                    # mas mantém o produto na exportação.
+                    csv_idx = r.get('csv_idx')
+                    if csv_idx is not None and 'Preço' in df_bling.columns:
+                        df_bling.at[csv_idx, 'Preço'] = r['antes']
+                    # Atualiza o preview para refletir que o preço não mudou
+                    r['depois']         = r['antes']
+                    r['diff_preco']     = 0.0
+                    r['variacao_pequena'] = False
+                    self.log(
+                        f"ℹ️  SKU {r['sku']}: preço mantido em R$ {r['antes']} (variação recusada, produto exportado).",
+                        "alerta"
+                    )
 
         if not resultado['preview_rows']:
             self.log("Nenhum produto restante após filtros.", "erro")

@@ -1,10 +1,10 @@
-# 💎 AutoPreço Perfumes (v2.1)
+# 💎 AutoPreço Perfumes (v2.2)
 
 Ferramenta desktop em **Python** para atualização automatizada de **preços** e **estoque** de perfumes no ERP [Bling](https://www.bling.com.br/).
 
 Recebe uma planilha XLSX do fornecedor e um CSV exportado do Bling, cruza os dados por nome de perfume com **algoritmo de matching fuzzy (Jaccard)**, calcula os preços finais aplicando câmbio e frete, suporta **decomposição 1:N ("Vários num Só")**, e exporta um CSV pronto para reimportação no Bling.
 
-> **🆕 Novidades da Versão 2.1**: Suporte completo a **produtos compostos (1:N)** com a janela *"Vários num Só"*, botão de divisão automática *"➗ Repartir Igualmente"* com alerta de sobras, e orquestração de múltiplas reassociações para um único item do fornecedor.
+> **🆕 Novidades da Versão 2.2**: **Desconto global no Preview** (campo % + "Aplicar a todos"), **exportação garantida** independente da resposta ao alerta de variação, edição de preço via menu de contexto e correção do limite de variação para incluir o valor exato (`<=`).
 
 ---
 
@@ -114,16 +114,22 @@ Se há produtos não encontrados (incluindo os conflitantes), o programa abre a 
 - **Associação 1:1**: selecione diretamente o produto correspondente do CSV.
 - **Associação 1:N ("📦 Vários")**: para itens como `"ZAKAT VARIOS"` (composto por múltiplos perfumes), abra a janela de decomposição e associe N produtos individuais do CSV com suas quantidades.
 
-#### 7. Filtro de Variação (só Modo Preço)
+#### 7. Alerta de Variação (só Modo Preço)
 
-Para cada produto cuja variação de preço é menor que o limite configurado (padrão R$10), o programa pergunta individualmente: "Deseja atualizar?". Isso evita alterações insignificantes que podem desalinhar com comparadores de preço.
+Para cada produto cuja variação de preço é **menor ou igual** ao limite configurado (padrão R$10), o programa pergunta individualmente: "Deseja aplicar o novo preço?"
+
+- **"Sim"** → exporta com o **preço novo**
+- **"Não"** → exporta com o **preço antigo** (reverte só o preço, o produto ainda vai no CSV)
+
+> O produto **sempre é exportado**. A única razão para não exportar é o item do XLSX não ter match no CSV (Passada 1).
 
 #### 8. Preview
 
 Janela modal com tabela completa de todos os produtos que serão exportados (incluindo os decompostos de lote). Permite:
 - **Conferir** cada match visualmente
-- **Trocar** um match errado (duplo clique ou clique direito)
-- **Editar** o valor diretamente (duplo clique na coluna "Preço Novo" / "Est. Novo")
+- **Desconto global** 🆕: campo de percentual (ex: `20`) + botão "Aplicar a todos" — recalcula todos os preços via `arredondar_preco(custo × 2 × (1 - pct/100))`
+- **Trocar** um match errado (duplo clique ou clique direito → "Trocar produto do CSV")
+- **Editar** o valor individualmente: duplo clique na coluna "Preço Novo" **ou** clique direito → "💲 Editar preço desta linha" 🆕
 - **Desmarcar** linhas com checkbox (☑/☐) para excluí-las da exportação
 - **Remover** linhas via menu de contexto
 
@@ -189,12 +195,15 @@ Ao clicar "Confirmar e Exportar", o programa:
   - Suporta associação simples (1:1) e decomposição em lote (1:N via botão **📦 Vários**)
   - Itens reassociados aparecem em azul no Preview com tag `REASSOC.`
   - Funciona em ambos os modos (Preço e Estoque)
-- **Editar valor** diretamente no preview (duplo clique no preço/estoque novo)
+- **Editar valor** diretamente no preview: duplo clique na coluna de valor **ou** clique direito → "💲 Editar preço desta linha"
 - **Remover linha** da exportação via menu de contexto
 
 ### Filtro de Variação
-- Campo configurável "Avisar se variação < R$" (padrão: R$10)
-- Para cada produto que se enquadra, pergunta individualmente: "Deseja atualizar?"
+- Campo configurável "Avisar se variação ≤ R$" (padrão: R$10)
+- Agora usa `<=` — variação **exatamente igual** ao limite também dispara o alerta
+- Para cada produto que se enquadra, pergunta individualmente: "Deseja aplicar o novo preço?"
+  - **"Sim"** → exporta com preço novo
+  - **"Não"** → exporta com preço **antigo** (produto nunca é bloqueado da exportação por esta tela)
 
 ### Validações e Travas de Segurança
 - **Conflito N:1 no Preview**: se duas linhas marcadas apontam para o mesmo produto CSV → botão Confirmar desabilitado (fica cinza) até desmarcar uma
@@ -256,7 +265,9 @@ python interface_perfumaria.pyw
 5. **Resolver não encontrados**:
    - Para itens 1:1, escolha o produto no combobox.
    - Para itens compostos (ex: `"ZAKAT VARIOS"`), clique em **"📦 Vários"**, adicione os perfumes, clique em **"➗ Repartir Igualmente"** e confirme.
-6. **Responder filtro de variação** — para variações pequenas, confirmar produto a produto
+6. **Responder alerta de variação** — para variações ≤ ao limite configurado:
+   - "Sim" → exporta com preço novo
+   - "Não" → exporta com preço **antigo** (produto nunca é bloqueado)
 7. **Revisar o Preview** — conferir cada linha, trocar matches errados, editar valores, marcar/desmarcar linhas
 8. **Confirmar e Exportar** — gera `perfumes_atualizados.csv` na mesma pasta do CSV original
 
@@ -340,7 +351,7 @@ O matching entre XLSX (fornecedor) e CSV (Bling) funciona em **2 passadas**:
 A classe principal que gerencia toda a aplicação, orquestração de threads e logs.
 
 ### `PreviewWindow` — Janela de Preview
-Tabela modal com todos os produtos prontos para exportação. Suporta seleção com checkboxes, edição inline e menu de contexto.
+Tabela modal com todos os produtos prontos para exportação. Suporta seleção com checkboxes, edição inline, desconto global e menu de contexto enriquecido.
 
 ### `TrocarMatchDialog` — Trocar Match
 Permite corrigir um match errado do algoritmo individualmente no preview.
@@ -359,7 +370,13 @@ Janela modal dedicada a desmembrar um item do XLSX em múltiplos produtos do CSV
 
 ## 🔖 Histórico de Versões
 
-### **v2.1** (Atual)
+### **v2.2** (Atual)
+- ✂️ **Desconto global no Preview**: nova barra com campo `%` + botão "Aplicar a todos". Fórmula: `arredondar_preco(custo × 2 × (1 − pct/100))`. Digitar `0` remove o desconto.
+- 📤 **Exportação garantida independente do alerta de variação**: ao responder "Não" ao alerta, o produto é exportado com o **preço antigo** (não é mais removido da exportação). A única razão para não exportar continua sendo ausência de match no CSV.
+- 💲 **Editar preço via menu de contexto**: novo item "💲 Editar preço desta linha" no clique direito do Preview.
+- 🔔 **Correção do limite de variação para `<=`**: variações **exatamente iguais** ao limite configurado agora disparam o alerta (antes, só `< limite` alertava).
+
+### **v2.1**
 - ✨ **Suporte a Associação 1:N ("Vários num Só")**: Permite decompor um item do XLSX em múltiplos produtos do CSV do Bling.
 - ➗ **Divisão Automática de Quantidades**: Novo botão "Repartir Igualmente" com tratamento inteligente de sobras/restos de divisão.
 - 🎨 **Correção de Layout em Telas Menores**: Reestruturação do empacotamento (`pack`) em modais para garantir visibilidade permanente dos botões no rodapé.
