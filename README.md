@@ -1,10 +1,10 @@
-# 💎 AutoPreço Perfumes (v2.2)
+# 💎 AutoPreço Perfumes (v2.3)
 
 Ferramenta desktop em **Python** para atualização automatizada de **preços** e **estoque** de perfumes no ERP [Bling](https://www.bling.com.br/).
 
-Recebe uma planilha XLSX do fornecedor e um CSV exportado do Bling, cruza os dados por nome de perfume com **algoritmo de matching fuzzy (Jaccard)**, calcula os preços finais aplicando câmbio e frete, suporta **decomposição 1:N ("Vários num Só")**, e exporta um CSV pronto para reimportação no Bling.
+Recebe uma planilha XLSX do fornecedor e um CSV exportado do Bling, cruza os dados por nome de perfume com **algoritmo de matching fuzzy (Jaccard)**, calcula os preços finais aplicando câmbio e frete, suporta **decomposição 1:N ("Vários num Só")**, e exporta um CSV pronto para reimportação no Bling e um arquivo TXT de conferência de estoque (`estoque.txt`).
 
-> **🆕 Novidades da Versão 2.2**: **Desconto global no Preview** (campo % + "Aplicar a todos"), **exportação garantida** independente da resposta ao alerta de variação, edição de preço via menu de contexto e correção do limite de variação para incluir o valor exato (`<=`).
+> **🆕 Novidades da Versão 2.3**: **Geração automática de `estoque.txt`** ao exportar (contendo `SKU: {sku} | Estoque: {quantidade}` com as unidades vindas do fornecedor), **desconto global no Preview** (campo % + "Aplicar a todos"), **exportação garantida** independente da resposta ao alerta de variação.
 
 ---
 
@@ -77,11 +77,12 @@ O programa segue um pipeline linear com pontos de intervenção manual:
                                                        │
                         ┌──────────────────────────────┘
                         ▼
-              ┌───────────────────────┐     ┌──────────────────────┐
-              │  8. PREVIEW           │ ──→ │  9. EXPORTAR CSV     │
-              │  (conferência visual) │     │  (perfumes_atualizados│
-              └───────────────────────┘     │  .csv)               │
-                                            └──────────────────────┘
+              ┌───────────────────────┐     ┌────────────────────────┐
+              │  8. PREVIEW           │ ──→ │  9. EXPORTAR CSV & TXT │
+              │  (conferência visual) │     │  - perfumes_atualizados│
+              └───────────────────────┘     │    .csv                │
+                                            │  - estoque.txt         │
+                                            └────────────────────────┘
 ```
 
 ### Detalhamento de cada etapa
@@ -139,6 +140,15 @@ Ao clicar "Confirmar e Exportar", o programa:
 1. Verifica se há produtos não associados (bloqueia no Modo Preço)
 2. Remove linhas desmarcadas (☐) do conjunto de exportação
 3. Grava **somente** as linhas alteradas no arquivo `perfumes_atualizados.csv`
+4. Se estiver no Modo Estoque ou se o XLSX tiver coluna de estoque, gera o arquivo `estoque.txt` com as unidades compradas/adicionadas e o rodapé padrão:
+   ```text
+   SKU: 19359 | Estoque: 5
+   ...
+   Nota ;
+   Entrada de Produtos ;
+   Nome: Julio;
+   QTDE.:02x
+   ```
 
 ---
 
@@ -370,7 +380,11 @@ Janela modal dedicada a desmembrar um item do XLSX em múltiplos produtos do CSV
 
 ## 🔖 Histórico de Versões
 
-### **v2.2** (Atual)
+### **v2.3** (Atual)
+- 📄 **Exportação de Estoque em TXT (`estoque.txt`)**: Gera automaticamente um arquivo TXT na mesma pasta do CSV de saída contendo o SKU e a quantidade do fornecedor no formato `SKU: {sku} | Estoque: {quantidade}` sempre que exportar (no Modo Estoque ou quando a planilha contiver coluna de estoque).
+- 🔄 **Preservação de Estoque em Reassociações e Trocas**: O estoque original da planilha do fornecedor é propagado e mantido em trocas manuais de match e decomposições ("Vários num Só").
+
+### **v2.2**
 - ✂️ **Desconto global no Preview**: nova barra com campo `%` + botão "Aplicar a todos". Fórmula: `arredondar_preco(custo × 2 × (1 − pct/100))`. Digitar `0` remove o desconto.
 - 📤 **Exportação garantida independente do alerta de variação**: ao responder "Não" ao alerta, o produto é exportado com o **preço antigo** (não é mais removido da exportação). A única razão para não exportar continua sendo ausência de match no CSV.
 - 💲 **Editar preço via menu de contexto**: novo item "💲 Editar preço desta linha" no clique direito do Preview.

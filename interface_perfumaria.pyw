@@ -1073,13 +1073,15 @@ class TrocarMatchDialog(tk.Toplevel):
 
         if modo == 'estoque':
             # Modo estoque: soma a quantidade ao estoque atual do novo produto
-            est_ant = parse_moeda(str(df_bling.at[novo_csv_idx, 'Estoque']).strip()
-                                  if 'Estoque' in df_bling.columns else '0')
-            qtd     = parse_moeda(row['depois'])
-            est_nov = est_ant + qtd
+            est_ant  = parse_moeda(str(df_bling.at[novo_csv_idx, 'Estoque']).strip()
+                                   if 'Estoque' in df_bling.columns else '0')
+            qtd_forn = row.get('qtd_forn')
+            qtd      = float(qtd_forn) if qtd_forn is not None else parse_moeda(row['depois'])
+            est_nov  = est_ant + qtd
             fmt = lambda v: str(int(v)) if v == int(v) else f"{v:.2f}".replace('.', ',')
             df_bling.at[novo_csv_idx, 'Estoque'] = fmt(est_nov)
             row.update({
+                'csv_idx': novo_csv_idx,
                 'sku': novo_sku, 'descricao': nova_desc,
                 'antes': fmt(est_ant), 'depois': fmt(est_nov),
                 'gtin': novo_gtin, 'reassociado': True,
@@ -1115,6 +1117,7 @@ class TrocarMatchDialog(tk.Toplevel):
                     row.get('desc_forn', nova_desc)
 
             row.update({
+                'csv_idx': novo_csv_idx,
                 'sku': novo_sku, 'descricao': nova_desc,
                 'antes': preco_antigo, 'depois': preco_novo,
                 'gtin': novo_gtin, 'diff_preco': diff_preco,

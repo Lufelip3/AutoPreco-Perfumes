@@ -492,7 +492,7 @@ def _passada_mapeamento(df_forn, csv_palavras, log_callback):
         nome_perfume       = str(linha['Nome do Perfume']).strip()
         quantidade_ml_str  = str(linha['Quantidade (ml)']).strip()
         valor_unitario_str = str(linha.get(col_val, '0')).strip()
-        qtd_estoque_str    = str(linha.get('Estoque (un)', '')).strip() if tem_estoque else ''
+        est_raw            = str(linha.get('Estoque (un)', '')).strip() if tem_estoque else ''
 
         # ── Validação de dados numéricos ──────────────────────────────
         # Células vazias no XLSX viram NaN no Pandas. Um NaN passa pelo
@@ -510,7 +510,7 @@ def _passada_mapeamento(df_forn, csv_palavras, log_callback):
         if math.isnan(valor_unitario):
             log_callback(f"[AVISO] Valor unitário inválido para '{nome_perfume}'. Pulando.", "erro")
             continue
-        qtd_estoque    = parse_moeda(qtd_estoque_str) if qtd_estoque_str else None
+        qtd_estoque = parse_moeda(est_raw) if (tem_estoque and est_raw.lower() not in ('', 'nan', 'none')) else None
 
         # ── Busca do melhor match no CSV ──────────────────────────────
         p_xlsx       = palavras_sig(nome_perfume)
@@ -726,11 +726,13 @@ def processar_perfumaria(arquivo_csv, arquivo_xlsx, cotacao_dolar, taxa_frete,
             )
             preview_rows.append({
                 'sku'      : sku_csv,
+                'csv_idx'  : csv_idx,
                 'descricao': desc_csv,
                 'campo'    : 'Estoque',
                 'antes'    : estoque_antigo,
                 'depois'   : qtd_fmt,
                 'gtin'     : gtin_csv,
+                'qtd_forn' : qtd_estoque,
             })
 
         # ── MODO PREÇO ────────────────────────────────────────────────
@@ -815,6 +817,7 @@ def processar_perfumaria(arquivo_csv, arquivo_xlsx, cotacao_dolar, taxa_frete,
                 'nome_xlsx'        : nome_perfume,
                 'quantidade_ml'    : quantidade_ml,
                 'valor_unitario'   : valor_unitario,
+                'qtd_forn'         : qtd_estoque,
             })
 
         indices_alterados.add(csv_idx)
@@ -869,13 +872,14 @@ def processar_perfumaria(arquivo_csv, arquivo_xlsx, cotacao_dolar, taxa_frete,
     for i_xlsx, linha in df_forn.iterrows():
         nome = str(linha['Nome do Perfume']).strip()
         if nome in nao_encontrados:
+            est_raw = str(linha.get('Estoque (un)', '')).strip() if tem_estoque_forn else ''
+            qtd_est = parse_moeda(est_raw) if (tem_estoque_forn and est_raw.lower() not in ('', 'nan', 'none')) else None
             nao_encontrados_data.append({
                 'i_xlsx'        : i_xlsx,
                 'nome_perfume'  : nome,
                 'quantidade_ml' : float(str(linha.get('Quantidade (ml)', '100')).replace(',', '.')),
                 'valor_unitario': parse_moeda(str(linha.get(col_val_forn or '', '0'))),
-                'qtd_estoque'   : parse_moeda(str(linha.get('Estoque (un)', '0')))
-                                  if tem_estoque_forn else None,
+                'qtd_estoque'   : qtd_est,
             })
 
     # Lista de todas as descrições do CSV para popular os comboboxes
@@ -883,10 +887,13 @@ def processar_perfumaria(arquivo_csv, arquivo_xlsx, cotacao_dolar, taxa_frete,
     csv_descricoes = [(idx, str(row[col_desc]).strip()) for idx, row in df_bling.iterrows()]
 
     caminho_saida = os.path.join(os.path.dirname(arquivo_csv), 'perfumes_atualizados.csv')
+    caminho_txt   = os.path.join(os.path.dirname(arquivo_csv), 'estoque.txt')
     return {
         'df_bling'            : df_bling,
         'indices_alterados'   : indices_alterados,
         'caminho_saida'       : caminho_saida,
+        'caminho_txt'         : caminho_txt,
+        'tem_estoque_forn'    : tem_estoque_forn,
         'preview_rows'        : preview_rows,
         'conflitos_idx'       : indices_conflito,
         'nao_encontrados'     : nao_encontrados,
@@ -910,10 +917,19 @@ def salvar_resultado(resultado, log_callback):
     Exporta SOMENTE as linhas que foram alteradas (indices_alterados),
     não o CSV inteiro. O arquivo é salvo na mesma pasta do CSV original
     com o nome 'perfumes_atualizados.csv'.
+
+    Se o Modo Estoque estiver ativo ou a planilha do fornecedor possuir
+    coluna de estoque, gera também 'estoque.txt' no formato:
+      SKU: {sku} | Estoque: {quantidade}
     """
     df_bling          = resultado['df_bling']
     indices_alterados = resultado['indices_alterados']
     caminho_saida     = resultado['caminho_saida']
+    caminho_txt       = resultado.get('caminho_txt') or os.path.join(
+        os.path.dirname(caminho_saida), 'estoque.txt'
+    )
+    modo_estoque      = resultado.get('modo') == 'estoque'
+    tem_estoque_forn  = resultado.get('tem_estoque_forn', False)
 
     if not indices_alterados:
         log_callback("AVISO: Nenhum produto para exportar.", "erro")
@@ -923,6 +939,41 @@ def salvar_resultado(resultado, log_callback):
     df_saida.to_csv(caminho_saida, sep=';', encoding='utf-8-sig', index=False)
     log_callback(f"✅ ARQUIVO SALVO: {caminho_saida}", "sucesso")
     log_callback(f"   {len(indices_alterados)} linha(s) exportadas.", "sucesso")
+
+    # Exportação do estoque.txt se estiver no Modo Estoque ou se o XLSX tiver coluna de estoque
+    if modo_estoque or tem_estoque_forn:
+        preview_rows = resultado.get('preview_rows', [])
+        estoque_por_sku = {}
+        for r in preview_rows:
+            if r.get('sel', '☑') == '☐':
+                continue
+            sku = str(r.get('sku', '')).strip()
+            qtd = r.get('qtd_forn')
+            if not sku or sku == 'N/A' or qtd is None:
+                continue
+            try:
+                qtd_num = float(qtd)
+            except (ValueError, TypeError):
+                continue
+            estoque_por_sku[sku] = estoque_por_sku.get(sku, 0.0) + qtd_num
+
+        if estoque_por_sku:
+            try:
+                with open(caminho_txt, 'w', encoding='utf-8') as f:
+                    for sku, qtd in estoque_por_sku.items():
+                        qtd_str = str(int(qtd)) if int(qtd) == qtd else f"{qtd:.2f}".replace('.', ',')
+                        f.write(f"SKU: {sku} | Estoque: {qtd_str}\n")
+                    f.write("Nota ;\n")
+                    f.write("Entrada de Produtos ;\n")
+                    f.write("Nome: Julio;\n")
+                    f.write("QTDE.:02x\n")
+                log_callback(f"✅ ESTOQUE TXT SALVO: {caminho_txt}", "sucesso")
+                log_callback(f"   {len(estoque_por_sku)} produto(s) no estoque TXT.", "sucesso")
+            except Exception as e:
+                log_callback(f"[ERRO] Falha ao salvar estoque.txt: {e}", "erro")
+        else:
+            log_callback("ℹ️ Nenhum produto com estoque informado no XLSX para o estoque.txt.", "alerta")
+
     return True
 
 
@@ -993,9 +1044,10 @@ def aplicar_reassociacao(resultado, reassociacoes, log_callback):
                 "alerta"
             )
             resultado['preview_rows'].append({
-                'sku': sku_csv, 'descricao': desc_csv, 'campo': 'Estoque',
+                'sku': sku_csv, 'csv_idx': csv_idx, 'descricao': desc_csv, 'campo': 'Estoque',
                 'antes': fmt_qtd(est_ant), 'depois': fmt_qtd(est_nov),
                 'gtin': gtin_csv, 'diff_preco': 0,
+                'qtd_forn': qtd_estoque,
             })
         else:
             # Modo preço: mesma fórmula da Passada 2
@@ -1023,7 +1075,7 @@ def aplicar_reassociacao(resultado, reassociacoes, log_callback):
                 "alerta"
             )
             resultado['preview_rows'].append({
-                'sku': sku_csv, 'descricao': desc_csv, 'campo': 'Preço',
+                'sku': sku_csv, 'csv_idx': csv_idx, 'descricao': desc_csv, 'campo': 'Preço',
                 'antes': preco_antigo, 'depois': preco_novo,
                 'gtin': gtin_csv, 'diff_preco': diff_preco,
                 'variacao_pequena': (0 < diff_preco <= limite_variacao),
@@ -1031,6 +1083,7 @@ def aplicar_reassociacao(resultado, reassociacoes, log_callback):
                 'compra': formatar_moeda(preco_compra),
                 'desc_forn': desc_forn,
                 'nome_xlsx': nome_perfume,
+                'qtd_forn': qtd_estoque,
             })
 
         resultado['indices_alterados'].add(csv_idx)

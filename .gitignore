@@ -2,13 +2,17 @@
 #  AutoPreço Perfumes — .gitignore
 # ==============================================================================
 
-# ── Planilhas e dados sensíveis ──────────────────────────────────────────────
-# Arquivos CSV e XLSX contêm dados de produtos, preços e estoque do ERP.
+# ── Planilhas, relatórios e dados gerados / sensíveis ────────────────────────
+# Arquivos CSV, XLSX e TXT contêm dados de produtos, preços e estoque do ERP.
 # Nunca devem ser versionados pois mudam constantemente e podem conter
 # informações comerciais confidenciais.
 *.csv
 *.xlsx
 *.xls
+~$*
+estoque.txt
+*.txt
+!requirements.txt
 
 # ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
